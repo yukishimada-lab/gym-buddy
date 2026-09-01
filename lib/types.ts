@@ -47,3 +47,48 @@ export type RoutineItemWithExercise = RoutineItem & {
 export type RoutineWithItems = Routine & {
   routine_items: RoutineItemWithExercise[];
 };
+
+// ------------------------------------------------------------
+// Phase 2: 食事管理と PFC 計算
+// ------------------------------------------------------------
+
+export type MealType = "breakfast" | "lunch" | "dinner" | "snack";
+
+/** 食品マスタ(PFC・カロリーはすべて 100g あたり) */
+export type FoodItem = {
+  id: string;
+  user_id: string | null; // null = 全ユーザー共通マスタ
+  name: string;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  calories: number;
+  created_at: string;
+};
+
+/** 食事記録(PFC・カロリーは「そのグラム数での値」を保存) */
+export type MealLog = {
+  id: string;
+  user_id: string;
+  meal_date: string; // YYYY-MM-DD
+  meal_type: MealType;
+  food_item_id: string | null;
+  food_name: string;
+  amount_g: number | null;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  calories: number;
+  photo_path: string | null;
+  created_at: string;
+};
+
+/** Gemini(写真解析・外食検索)が返す 1 品目分の推定値 */
+export type EstimatedFoodItem = {
+  food_name: string;
+  amount_g: number | null;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  calories: number;
+};

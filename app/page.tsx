@@ -1,35 +1,51 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import SortableList from "@/components/SortableList";
+import SetInputList, { nextSet } from "@/components/SetInputList";
+import TrendBadges from "@/components/TrendBadges";
+import { formatDateLabel, todayString } from "@/lib/date";
+import { VIZ } from "@/lib/viz";
+import {
+  buildPreviousRecordMap,
+  compareWithPrevious,
+  formatWeight,
+  maxWeight,
+  sortLogs,
+  sortSets,
+  totalVolume,
+  type PreviousRecord,
+} from "@/lib/workoutStats";
 import type {
   Exercise,
   RoutineWithItems,
+  SetInput,
   WorkoutLogWithExercise,
+  WorkoutSet,
 } from "@/lib/types";
 
-function todayString() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+const PHASE4_SETUP_HINT = "(supabase/phase4.sql を実行済みか確認してください)";
+
+/** DB のセットを入力フォーム用の文字列に変換する */
+function toSetInputs(sets: WorkoutSet[]): SetInput[] {
+  return sortSets(sets).map((s) => ({
+    id: s.id,
+    weight_kg: String(Number(s.weight_kg)),
+    reps: String(Number(s.reps)),
+  }));
 }
 
-function formatDateLabel(dateStr: string) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const weekday = ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];
-  return `${y}年${m}月${d}日(${weekday})`;
+/** 入力値を保存できる形(数値)に変換する。空欄は 0 扱い */
+function toSetRows(sets: SetInput[]) {
+  return sets.map((s, index) => ({
+    set_number: index + 1,
+    weight_kg: Number(s.weight_kg) || 0,
+    reps: Number(s.reps) || 0,
+  }));
 }
-
-type EditState = {
-  id: string;
-  weight_kg: string;
-  reps: string;
-  sets: string;
-};
 
 function RecordPage() {
   const searchParams = useSearchParams();
@@ -37,6 +53,9 @@ function RecordPage() {
     () => searchParams.get("date") ?? todayString()
   );
   const [logs, setLogs] = useState<WorkoutLogWithExercise[]>([]);
+  const [previous, setPrevious] = useState<Map<string, PreviousRecord>>(
+    new Map()
+  );
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [routines, setRoutines] = useState<RoutineWithItems[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,30 +63,63 @@ function RecordPage() {
 
   // 追加フォーム
   const [exerciseId, setExerciseId] = useState("");
-  const [weight, setWeight] = useState("");
-  const [reps, setReps] = useState("10");
-  const [sets, setSets] = useState("3");
+  const [newSets, setNewSets] = useState<SetInput[]>([
+    { id: null, weight_kg: "", reps: "10" },
+  ]);
   const [saving, setSaving] = useState(false);
 
-  // 編集
-  const [edit, setEdit] = useState<EditState | null>(null);
+  // 編集(記録 1 件分のセットをまとめて編集する)
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editSets, setEditSets] = useState<SetInput[]>([]);
 
   // ルーティン展開
   const [routineId, setRoutineId] = useState("");
   const [applying, setApplying] = useState(false);
 
+  /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
     const supabase = createClient();
-    const { data, error } = await supabase
+    const { data, error: logError } = await supabase
       .from("workout_logs")
-      .select("*, exercises(id, name, muscle_group)")
+      .select("*, exercises(id, name, muscle_group), workout_sets(*)")
       .eq("workout_date", targetDate)
+      .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
-    if (error) {
-      setError(`記録の取得に失敗しました: ${error.message}`);
-    } else {
-      setLogs((data as WorkoutLogWithExercise[]) ?? []);
+
+    if (logError) {
+      setError(`記録の取得に失敗しました: ${logError.message}${PHASE4_SETUP_HINT}`);
+      return;
     }
+    const dayLogs = sortLogs((data as WorkoutLogWithExercise[]) ?? []);
+    setLogs(dayLogs);
+    setError(null);
+
+    const exerciseIds = [...new Set(dayLogs.map((l) => l.exercise_id))];
+    if (exerciseIds.length === 0) {
+      setPrevious(new Map());
+      return;
+    }
+
+    // その日より前の記録を新しい順に取り、種目ごとに最初の 1 件を「前回」とする
+    const { data: prevData } = await supabase
+      .from("workout_logs")
+      .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+      .in("exercise_id", exerciseIds)
+      .lt("workout_date", targetDate)
+      .order("workout_date", { ascending: false })
+      .limit(200);
+
+    setPrevious(
+      buildPreviousRecordMap(
+        (prevData as
+          | {
+              exercise_id: string;
+              workout_date: string;
+              workout_sets: WorkoutSet[] | null;
+            }[]
+          | null) ?? []
+      )
+    );
   }, []);
 
   useEffect(() => {
@@ -92,6 +144,7 @@ function RecordPage() {
 
   useEffect(() => {
     (async () => {
+      setEditId(null);
       await loadLogs(date);
     })();
   }, [date, loadLogs]);
@@ -99,55 +152,128 @@ function RecordPage() {
   const addLog = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!exerciseId) return;
+    if (newSets.length === 0) {
+      setError("セットを 1 つ以上追加してください。");
+      return;
+    }
     setSaving(true);
     setError(null);
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const { error } = await supabase.from("workout_logs").insert({
-      user_id: user.id,
-      workout_date: date,
-      exercise_id: exerciseId,
-      weight_kg: Number(weight) || 0,
-      reps: Number(reps) || 0,
-      sets: Number(sets) || 0,
-    });
-    if (error) {
-      setError(`保存に失敗しました: ${error.message}`);
-    } else {
-      await loadLogs(date);
+    if (!user) {
+      setSaving(false);
+      return;
     }
+
+    const maxOrder = logs.reduce((m, l) => Math.max(m, l.sort_order), 0);
+    const { data: inserted, error: insertError } = await supabase
+      .from("workout_logs")
+      .insert({
+        user_id: user.id,
+        workout_date: date,
+        exercise_id: exerciseId,
+        sort_order: maxOrder + 1,
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !inserted) {
+      setError(
+        `保存に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`
+      );
+      setSaving(false);
+      return;
+    }
+
+    const { error: setsError } = await supabase.from("workout_sets").insert(
+      toSetRows(newSets).map((row) => ({
+        workout_log_id: inserted.id as string,
+        ...row,
+      }))
+    );
+    if (setsError) {
+      setError(`セットの保存に失敗しました: ${setsError.message}`);
+    } else {
+      // 次の種目もだいたい同じセット構成なので、直前の入力を残しておく
+      setExerciseId("");
+    }
+    await loadLogs(date);
     setSaving(false);
   };
 
+  const startEdit = (log: WorkoutLogWithExercise) => {
+    setEditId(log.id);
+    const inputs = toSetInputs(log.workout_sets ?? []);
+    setEditSets(inputs.length > 0 ? inputs : [nextSet([])]);
+  };
+
   const saveEdit = async () => {
-    if (!edit) return;
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("workout_logs")
-      .update({
-        weight_kg: Number(edit.weight_kg) || 0,
-        reps: Number(edit.reps) || 0,
-        sets: Number(edit.sets) || 0,
-      })
-      .eq("id", edit.id);
-    if (error) {
-      setError(`更新に失敗しました: ${error.message}`);
-    } else {
-      setEdit(null);
-      await loadLogs(date);
+    if (!editId) return;
+    if (editSets.length === 0) {
+      setError("セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。");
+      return;
     }
+    setSaving(true);
+    setError(null);
+    const supabase = createClient();
+
+    // set_number を振り直すので、いったん全部消してから入れ直す
+    const { error: delError } = await supabase
+      .from("workout_sets")
+      .delete()
+      .eq("workout_log_id", editId);
+    if (delError) {
+      setError(`更新に失敗しました: ${delError.message}`);
+      setSaving(false);
+      return;
+    }
+    const { error: insError } = await supabase.from("workout_sets").insert(
+      toSetRows(editSets).map((row) => ({ workout_log_id: editId, ...row }))
+    );
+    if (insError) {
+      setError(`更新に失敗しました: ${insError.message}`);
+    } else {
+      setEditId(null);
+    }
+    await loadLogs(date);
+    setSaving(false);
   };
 
   const deleteLog = async (id: string) => {
     if (!confirm("この記録を削除しますか?")) return;
     const supabase = createClient();
-    const { error } = await supabase.from("workout_logs").delete().eq("id", id);
-    if (error) {
-      setError(`削除に失敗しました: ${error.message}`);
+    const { error: delError } = await supabase
+      .from("workout_logs")
+      .delete()
+      .eq("id", id);
+    if (delError) {
+      setError(`削除に失敗しました: ${delError.message}`);
     } else {
+      await loadLogs(date);
+    }
+  };
+
+  /** ドラッグ&ドロップの結果を sort_order として保存する */
+  const reorderLogs = async (next: WorkoutLogWithExercise[]) => {
+    const renumbered = next.map((log, index) => ({
+      ...log,
+      sort_order: index + 1,
+    }));
+    setLogs(renumbered); // 先に画面を動かして、待たせない
+    const supabase = createClient();
+    const results = await Promise.all(
+      renumbered.map((log) =>
+        supabase
+          .from("workout_logs")
+          .update({ sort_order: log.sort_order })
+          .eq("id", log.id)
+      )
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) {
+      setError(`並び順の保存に失敗しました: ${failed.error.message}`);
       await loadLogs(date);
     }
   };
@@ -161,24 +287,63 @@ function RecordPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const rows = [...routine.routine_items]
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((item) => ({
-        user_id: user.id,
-        workout_date: date,
-        exercise_id: item.exercise_id,
-        weight_kg: item.default_weight_kg ?? 0,
-        reps: item.default_reps,
-        sets: item.default_sets,
+    if (!user) {
+      setApplying(false);
+      return;
+    }
+
+    const items = [...routine.routine_items].sort(
+      (a, b) => a.sort_order - b.sort_order
+    );
+    const maxOrder = logs.reduce((m, l) => Math.max(m, l.sort_order), 0);
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("workout_logs")
+      .insert(
+        items.map((item, index) => ({
+          user_id: user.id,
+          workout_date: date,
+          exercise_id: item.exercise_id,
+          sort_order: maxOrder + index + 1,
+        }))
+      )
+      .select("id, exercise_id, sort_order");
+
+    if (insertError || !inserted) {
+      setError(
+        `ルーティンの展開に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`
+      );
+      setApplying(false);
+      return;
+    }
+
+    // ルーティンの初期値(目標セット数・重量・回数)をセットに展開する
+    const insertedRows = inserted as {
+      id: string;
+      exercise_id: string;
+      sort_order: number;
+    }[];
+    const sorted = [...insertedRows].sort((a, b) => a.sort_order - b.sort_order);
+    const setRows = sorted.flatMap((row, index) => {
+      const item = items[index];
+      const count = Math.max(item?.default_sets ?? 1, 1);
+      return Array.from({ length: count }, (_, i) => ({
+        workout_log_id: row.id,
+        set_number: i + 1,
+        weight_kg: Number(item?.default_weight_kg ?? 0) || 0,
+        reps: item?.default_reps ?? 0,
       }));
-    const { error } = await supabase.from("workout_logs").insert(rows);
-    if (error) {
-      setError(`ルーティンの展開に失敗しました: ${error.message}`);
+    });
+
+    const { error: setInsertError } = await supabase
+      .from("workout_sets")
+      .insert(setRows);
+    if (setInsertError) {
+      setError(`セットの展開に失敗しました: ${setInsertError.message}`);
     } else {
       setRoutineId("");
-      await loadLogs(date);
     }
+    await loadLogs(date);
     setApplying(false);
   };
 
@@ -201,9 +366,17 @@ function RecordPage() {
 
       {/* 日付選択 */}
       <div className="mb-4 rounded-xl bg-white p-3 shadow-sm">
-        <label className="mb-1 block text-xs font-semibold text-gray-500">
-          日付
-        </label>
+        <div className="mb-1 flex items-center justify-between">
+          <label className="block text-xs font-semibold text-gray-500">
+            日付
+          </label>
+          <Link
+            href={`/calendar?date=${date}`}
+            className="text-xs font-semibold text-blue-600"
+          >
+            カレンダーで選ぶ ›
+          </Link>
+        </div>
         <input
           type="date"
           value={date}
@@ -251,9 +424,15 @@ function RecordPage() {
 
       {/* 記録一覧 */}
       <section className="mb-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-600">
-          この日の記録({logs.length}件)
-        </h2>
+        <div className="mb-2 flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-gray-600">
+            この日の記録({logs.length}件)
+          </h2>
+          {logs.length > 1 && (
+            <p className="text-xs text-gray-500">⠿ を長押しで並べ替え</p>
+          )}
+        </div>
+
         {loading ? (
           <p className="py-6 text-center text-sm text-gray-400">読み込み中...</p>
         ) : logs.length === 0 ? (
@@ -261,107 +440,112 @@ function RecordPage() {
             まだ記録がありません
           </p>
         ) : (
-          <ul className="space-y-2">
-            {logs.map((log) => (
-              <li key={log.id} className="rounded-xl bg-white p-3 shadow-sm">
-                {edit?.id === log.id ? (
-                  <div>
-                    <p className="mb-2 font-semibold">
-                      {log.exercises?.name ?? "(削除された種目)"}
-                    </p>
-                    <div className="mb-2 grid grid-cols-3 gap-2">
-                      <label className="text-xs text-gray-500">
-                        重量(kg)
-                        <input
-                          type="number"
-                          inputMode="decimal"
-                          step="0.5"
-                          min="0"
-                          value={edit.weight_kg}
-                          onChange={(e) =>
-                            setEdit({ ...edit, weight_kg: e.target.value })
-                          }
-                          className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                        />
-                      </label>
-                      <label className="text-xs text-gray-500">
-                        回数
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min="0"
-                          value={edit.reps}
-                          onChange={(e) =>
-                            setEdit({ ...edit, reps: e.target.value })
-                          }
-                          className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                        />
-                      </label>
-                      <label className="text-xs text-gray-500">
-                        セット
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min="0"
-                          value={edit.sets}
-                          onChange={(e) =>
-                            setEdit({ ...edit, sets: e.target.value })
-                          }
-                          className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                        />
-                      </label>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={saveEdit}
-                        className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80"
-                      >
-                        保存
-                      </button>
-                      <button
-                        onClick={() => setEdit(null)}
-                        className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80"
-                      >
-                        キャンセル
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold">
+          <SortableList
+            items={logs}
+            onReorder={reorderLogs}
+            itemLabel="種目"
+            className="space-y-2"
+          >
+            {(log, { dragHandle }) => {
+              const sets = sortSets(log.workout_sets ?? []);
+              const comparison = compareWithPrevious(
+                sets,
+                previous.get(log.exercise_id) ?? null
+              );
+              const isEditing = editId === log.id;
+
+              return (
+                <div className="rounded-xl bg-white p-3 shadow-sm">
+                  {isEditing ? (
+                    <div>
+                      <p className="mb-2 font-semibold">
                         {log.exercises?.name ?? "(削除された種目)"}
                       </p>
-                      <p className="text-sm text-gray-600">
-                        {log.weight_kg}kg × {log.reps}回 × {log.sets}セット
-                      </p>
+                      <SetInputList
+                        sets={editSets}
+                        onChange={setEditSets}
+                        idPrefix={`edit-${log.id}`}
+                      />
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={saveEdit}
+                          disabled={saving}
+                          className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                        >
+                          保存
+                        </button>
+                        <button
+                          onClick={() => setEditId(null)}
+                          className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80"
+                        >
+                          キャンセル
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button
-                        onClick={() =>
-                          setEdit({
-                            id: log.id,
-                            weight_kg: String(log.weight_kg),
-                            reps: String(log.reps),
-                            sets: String(log.sets),
-                          })
-                        }
-                        className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
-                      >
-                        編集
-                      </button>
-                      <button
-                        onClick={() => deleteLog(log.id)}
-                        className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100"
-                      >
-                        削除
-                      </button>
+                  ) : (
+                    <div>
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="flex min-w-0 flex-1 items-center gap-1">
+                          {dragHandle}
+                          <p className="min-w-0 truncate font-semibold">
+                            {log.exercises?.name ?? "(削除された種目)"}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            onClick={() => startEdit(log)}
+                            className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
+                          >
+                            編集
+                          </button>
+                          <button
+                            onClick={() => deleteLog(log.id)}
+                            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100"
+                          >
+                            削除
+                          </button>
+                        </div>
+                      </div>
+
+                      {sets.length === 0 ? (
+                        <p className="mt-1 pl-9 text-sm text-gray-400">
+                          セットが未入力です
+                        </p>
+                      ) : (
+                        <ul className="mt-1 space-y-0.5 pl-9">
+                          {sets.map((s, i) => (
+                            <li
+                              key={s.id}
+                              className="flex items-baseline gap-2 text-sm"
+                            >
+                              <span
+                                className="w-9 shrink-0 text-xs tabular-nums"
+                                style={{ color: VIZ.muted }}
+                              >
+                                {i + 1}set
+                              </span>
+                              <span className="tabular-nums text-gray-700">
+                                {formatWeight(Number(s.weight_kg))}kg ×{" "}
+                                {Number(s.reps)}回
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <div className="pl-9">
+                        <TrendBadges
+                          comparison={comparison}
+                          maxWeight={maxWeight(sets)}
+                          totalVolume={totalVolume(sets)}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+                  )}
+                </div>
+              );
+            }}
+          </SortableList>
         )}
       </section>
 
@@ -378,7 +562,7 @@ function RecordPage() {
               value={exerciseId}
               onChange={(e) => setExerciseId(e.target.value)}
               required
-              className="mb-2 w-full rounded-lg border border-gray-300 px-3 py-2"
+              className="mb-3 w-full rounded-lg border border-gray-300 px-3 py-2"
             >
               <option value="">種目を選択</option>
               {exercises.map((ex) => (
@@ -388,47 +572,17 @@ function RecordPage() {
                 </option>
               ))}
             </select>
-            <div className="mb-3 grid grid-cols-3 gap-2">
-              <label className="text-xs text-gray-500">
-                重量(kg)
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.5"
-                  min="0"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  placeholder="60"
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                />
-              </label>
-              <label className="text-xs text-gray-500">
-                回数
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  value={reps}
-                  onChange={(e) => setReps(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                />
-              </label>
-              <label className="text-xs text-gray-500">
-                セット
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  value={sets}
-                  onChange={(e) => setSets(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
-                />
-              </label>
-            </div>
+
+            <SetInputList
+              sets={newSets}
+              onChange={setNewSets}
+              idPrefix="new"
+            />
+
             <button
               type="submit"
-              disabled={saving || !exerciseId}
-              className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white active:opacity-80 disabled:opacity-40"
+              disabled={saving || !exerciseId || newSets.length === 0}
+              className="mt-3 w-full rounded-xl bg-blue-600 py-3 font-semibold text-white active:opacity-80 disabled:opacity-40"
             >
               追加する
             </button>

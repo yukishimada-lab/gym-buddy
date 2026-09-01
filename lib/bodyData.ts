@@ -20,21 +20,16 @@ export async function loadGoalAnalysisInput(
   const nutritionFrom = addDays(today, -(NUTRITION_WINDOW_DAYS - 1));
   const workoutFrom = addDays(today, -(TREND_WINDOW_DAYS - 1));
 
-  const [goalRes, weightRes, inbodyRes, mealRes, workoutRes] =
+  // Phase 4 で weight_logs と inbody_logs は body_logs に統合済み
+  const [goalRes, bodyRes, mealRes, workoutRes] =
     await Promise.all([
       supabase.from("body_goals").select("*").maybeSingle(),
       supabase
-        .from("weight_logs")
-        .select("log_date, weight_kg")
+        .from("body_logs")
+        .select("log_date, weight_kg, body_fat_percent, bmr_kcal")
         .gte("log_date", trendFrom)
         .lte("log_date", today)
         .order("log_date", { ascending: true }),
-      supabase
-        .from("inbody_logs")
-        .select("measured_date, body_fat_percent, bmr_kcal")
-        .gte("measured_date", trendFrom)
-        .lte("measured_date", today)
-        .order("measured_date", { ascending: true }),
       supabase
         .from("meal_logs")
         .select("meal_date, calories, protein_g, fat_g, carbs_g")
@@ -49,30 +44,31 @@ export async function loadGoalAnalysisInput(
 
   const goalRow = (goalRes.data as BodyGoal | null) ?? null;
 
-  const weights = ((weightRes.data as
-    | { log_date: string; weight_kg: number }[]
-    | null) ?? []).map((row) => ({
-    date: row.log_date,
-    weight_kg: Number(row.weight_kg),
-  }));
-
-  const inbodyRows = (inbodyRes.data as
+  const bodyRows = (bodyRes.data as
     | {
-        measured_date: string;
+        log_date: string;
+        weight_kg: number | null;
         body_fat_percent: number | null;
         bmr_kcal: number | null;
       }[]
     | null) ?? [];
 
-  const bodyFats = inbodyRows
+  const weights = bodyRows
+    .filter((row) => row.weight_kg != null)
+    .map((row) => ({
+      date: row.log_date,
+      weight_kg: Number(row.weight_kg),
+    }));
+
+  const bodyFats = bodyRows
     .filter((row) => row.body_fat_percent != null)
     .map((row) => ({
-      date: row.measured_date,
+      date: row.log_date,
       body_fat_percent: Number(row.body_fat_percent),
     }));
 
   // 基礎代謝量は記録がある中で最新のものを使う(日付昇順で取得済み)
-  const bmrRow = [...inbodyRows].reverse().find((row) => row.bmr_kcal != null);
+  const bmrRow = [...bodyRows].reverse().find((row) => row.bmr_kcal != null);
   const bmrKcal = bmrRow ? Number(bmrRow.bmr_kcal) : null;
 
   // 食事記録は日別に合計する(記録がある日だけを平均対象にする)

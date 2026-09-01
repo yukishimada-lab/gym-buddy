@@ -72,7 +72,7 @@ export async function POST() {
     return NextResponse.json(
       {
         error:
-          "データの取得に失敗しました。supabase/phase3.sql を実行済みか確認してください。",
+          "データの取得に失敗しました。supabase/phase4.sql を実行済みか確認してください。",
       },
       { status: 500 }
     );

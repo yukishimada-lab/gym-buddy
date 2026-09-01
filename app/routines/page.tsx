@@ -2,7 +2,26 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Exercise, RoutineWithItems } from "@/lib/types";
+import SortableList from "@/components/SortableList";
+import type {
+  Exercise,
+  RoutineItemWithExercise,
+  RoutineWithItems,
+} from "@/lib/types";
+import { formatWeight } from "@/lib/workoutStats";
+
+/** ルーティン内の種目を sort_order 昇順にそろえる */
+function sortItems(items: RoutineItemWithExercise[]) {
+  return [...items].sort(
+    (a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)
+  );
+}
+
+type ItemForm = {
+  default_weight_kg: string;
+  default_reps: string;
+  default_sets: string;
+};
 
 export default function RoutinesPage() {
   const [routines, setRoutines] = useState<RoutineWithItems[]>([]);
@@ -20,6 +39,14 @@ export default function RoutinesPage() {
   const [itemReps, setItemReps] = useState("10");
   const [itemSets, setItemSets] = useState("3");
 
+  // 登録済みの種目の数値を後から編集する
+  const [editItemId, setEditItemId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<ItemForm>({
+    default_weight_kg: "",
+    default_reps: "",
+    default_sets: "",
+  });
+
   const load = useCallback(async () => {
     const supabase = createClient();
     const [rtRes, exRes] = await Promise.all([
@@ -32,7 +59,13 @@ export default function RoutinesPage() {
     if (rtRes.error) {
       setError(`ルーティンの取得に失敗しました: ${rtRes.error.message}`);
     } else {
-      setRoutines((rtRes.data as RoutineWithItems[]) ?? []);
+      setRoutines(
+        ((rtRes.data as RoutineWithItems[]) ?? []).map((r) => ({
+          ...r,
+          routine_items: sortItems(r.routine_items ?? []),
+        }))
+      );
+      setError(null);
     }
     if (!exRes.error) setExercises(exRes.data ?? []);
     setLoading(false);
@@ -53,12 +86,15 @@ export default function RoutinesPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const { error } = await supabase
+    if (!user) {
+      setSaving(false);
+      return;
+    }
+    const { error: insError } = await supabase
       .from("routines")
       .insert({ user_id: user.id, name: newName.trim() });
-    if (error) {
-      setError(`作成に失敗しました: ${error.message}`);
+    if (insError) {
+      setError(`作成に失敗しました: ${insError.message}`);
     } else {
       setNewName("");
       await load();
@@ -69,12 +105,12 @@ export default function RoutinesPage() {
   const deleteRoutine = async (routine: RoutineWithItems) => {
     if (!confirm(`「${routine.name}」を削除しますか?`)) return;
     const supabase = createClient();
-    const { error } = await supabase
+    const { error: delError } = await supabase
       .from("routines")
       .delete()
       .eq("id", routine.id);
-    if (error) {
-      setError(`削除に失敗しました: ${error.message}`);
+    if (delError) {
+      setError(`削除に失敗しました: ${delError.message}`);
     } else {
       await load();
     }
@@ -85,11 +121,11 @@ export default function RoutinesPage() {
     setSaving(true);
     setError(null);
     const supabase = createClient();
-    const maxOrder = Math.max(
-      0,
-      ...routine.routine_items.map((i) => i.sort_order)
+    const maxOrder = routine.routine_items.reduce(
+      (m, i) => Math.max(m, i.sort_order),
+      0
     );
-    const { error } = await supabase.from("routine_items").insert({
+    const { error: insError } = await supabase.from("routine_items").insert({
       routine_id: routine.id,
       exercise_id: itemExerciseId,
       default_weight_kg: itemWeight === "" ? null : Number(itemWeight),
@@ -97,8 +133,8 @@ export default function RoutinesPage() {
       default_sets: Number(itemSets) || 0,
       sort_order: maxOrder + 1,
     });
-    if (error) {
-      setError(`種目の追加に失敗しました: ${error.message}`);
+    if (insError) {
+      setError(`種目の追加に失敗しました: ${insError.message}`);
     } else {
       setItemExerciseId("");
       setItemWeight("");
@@ -109,13 +145,81 @@ export default function RoutinesPage() {
 
   const deleteItem = async (itemId: string) => {
     const supabase = createClient();
-    const { error } = await supabase
+    const { error: delError } = await supabase
       .from("routine_items")
       .delete()
       .eq("id", itemId);
-    if (error) {
-      setError(`削除に失敗しました: ${error.message}`);
+    if (delError) {
+      setError(`削除に失敗しました: ${delError.message}`);
     } else {
+      await load();
+    }
+  };
+
+  const startEditItem = (item: RoutineItemWithExercise) => {
+    setEditItemId(item.id);
+    setEditForm({
+      default_weight_kg:
+        item.default_weight_kg != null
+          ? String(Number(item.default_weight_kg))
+          : "",
+      default_reps: String(item.default_reps),
+      default_sets: String(item.default_sets),
+    });
+  };
+
+  const saveEditItem = async () => {
+    if (!editItemId) return;
+    setSaving(true);
+    setError(null);
+    const supabase = createClient();
+    const { error: updError } = await supabase
+      .from("routine_items")
+      .update({
+        default_weight_kg:
+          editForm.default_weight_kg.trim() === ""
+            ? null
+            : Number(editForm.default_weight_kg),
+        default_reps: Number(editForm.default_reps) || 0,
+        default_sets: Number(editForm.default_sets) || 0,
+      })
+      .eq("id", editItemId);
+    if (updError) {
+      setError(`更新に失敗しました: ${updError.message}`);
+    } else {
+      setEditItemId(null);
+      await load();
+    }
+    setSaving(false);
+  };
+
+  /** ドラッグ&ドロップの結果を sort_order として保存する */
+  const reorderItems = async (
+    routine: RoutineWithItems,
+    next: RoutineItemWithExercise[]
+  ) => {
+    const renumbered = next.map((item, index) => ({
+      ...item,
+      sort_order: index + 1,
+    }));
+    // 先に画面を動かして、保存待ちで固まらないようにする
+    setRoutines((prev) =>
+      prev.map((r) =>
+        r.id === routine.id ? { ...r, routine_items: renumbered } : r
+      )
+    );
+    const supabase = createClient();
+    const results = await Promise.all(
+      renumbered.map((item) =>
+        supabase
+          .from("routine_items")
+          .update({ sort_order: item.sort_order })
+          .eq("id", item.id)
+      )
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) {
+      setError(`並び順の保存に失敗しました: ${failed.error.message}`);
       await load();
     }
   };
@@ -125,6 +229,7 @@ export default function RoutinesPage() {
       <h1 className="mb-4 text-xl font-bold">📋 ルーティン</h1>
       <p className="mb-4 text-xs text-gray-500">
         「胸の日」「脚の日」のような種目の組み合わせを保存しておくと、記録ページからワンタップでその日の記録に展開できます。
+        種目の順番は ⠿ を長押ししてドラッグすると並べ替えられます。
       </p>
 
       {error && (
@@ -168,9 +273,7 @@ export default function RoutinesPage() {
       ) : (
         <ul className="space-y-3">
           {routines.map((routine) => {
-            const items = [...routine.routine_items].sort(
-              (a, b) => a.sort_order - b.sort_order
-            );
+            const items = routine.routine_items;
             const isOpen = openId === routine.id;
             return (
               <li key={routine.id} className="rounded-xl bg-white p-3 shadow-sm">
@@ -198,33 +301,115 @@ export default function RoutinesPage() {
                 {items.length === 0 ? (
                   <p className="text-sm text-gray-400">種目がありません</p>
                 ) : (
-                  <ul className="space-y-1">
-                    {items.map((item) => (
-                      <li
-                        key={item.id}
-                        className="flex items-center justify-between text-sm"
-                      >
-                        <span className="truncate text-gray-700">
-                          {item.exercises?.name ?? "(削除された種目)"}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-2 pl-2">
-                          <span className="text-gray-500">
+                  <SortableList
+                    items={items}
+                    onReorder={(next) => reorderItems(routine, next)}
+                    itemLabel="種目"
+                    className="space-y-1"
+                  >
+                    {(item, { dragHandle }) =>
+                      editItemId === item.id ? (
+                        <div className="rounded-lg bg-gray-50 p-2">
+                          <p className="mb-2 truncate text-sm font-semibold">
+                            {item.exercises?.name ?? "(削除された種目)"}
+                          </p>
+                          <div className="mb-2 grid grid-cols-3 gap-2">
+                            <label className="text-xs text-gray-500">
+                              重量(kg)
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                step="0.5"
+                                min="0"
+                                placeholder="任意"
+                                value={editForm.default_weight_kg}
+                                onChange={(e) =>
+                                  setEditForm({
+                                    ...editForm,
+                                    default_weight_kg: e.target.value,
+                                  })
+                                }
+                                className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
+                              />
+                            </label>
+                            <label className="text-xs text-gray-500">
+                              回数
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="0"
+                                value={editForm.default_reps}
+                                onChange={(e) =>
+                                  setEditForm({
+                                    ...editForm,
+                                    default_reps: e.target.value,
+                                  })
+                                }
+                                className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
+                              />
+                            </label>
+                            <label className="text-xs text-gray-500">
+                              セット
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="0"
+                                value={editForm.default_sets}
+                                onChange={(e) =>
+                                  setEditForm({
+                                    ...editForm,
+                                    default_sets: e.target.value,
+                                  })
+                                }
+                                className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
+                              />
+                            </label>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={saveEditItem}
+                              disabled={saving}
+                              className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                            >
+                              保存
+                            </button>
+                            <button
+                              onClick={() => setEditItemId(null)}
+                              className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80"
+                            >
+                              キャンセル
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          {dragHandle}
+                          <span className="min-w-0 flex-1 truncate text-sm text-gray-700">
+                            {item.exercises?.name ?? "(削除された種目)"}
+                          </span>
+                          <span className="shrink-0 text-xs tabular-nums text-gray-500">
                             {item.default_weight_kg != null
-                              ? `${item.default_weight_kg}kg × `
+                              ? `${formatWeight(Number(item.default_weight_kg))}kg × `
                               : ""}
                             {item.default_reps}回 × {item.default_sets}set
                           </span>
                           <button
+                            onClick={() => startEditItem(item)}
+                            className="shrink-0 rounded-lg bg-gray-100 px-2 py-1.5 text-xs active:bg-gray-200"
+                          >
+                            編集
+                          </button>
+                          <button
                             onClick={() => deleteItem(item.id)}
-                            className="text-red-500 active:opacity-70"
-                            aria-label="種目を外す"
+                            className="shrink-0 rounded-lg px-1.5 py-1.5 text-sm text-red-500 active:bg-red-50"
+                            aria-label={`${item.exercises?.name ?? "この種目"}をルーティンから外す`}
                           >
                             ✕
                           </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                        </div>
+                      )
+                    }
+                  </SortableList>
                 )}
 
                 {isOpen && (

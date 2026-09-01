@@ -10,8 +10,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { InbodyLog, WeightLog } from "@/lib/types";
+import type { BodyLog } from "@/lib/types";
 import { addDays, formatDate, parseDate } from "@/lib/bodyAnalysis";
+import { VIZ } from "@/lib/viz";
 
 /**
  * 体重・体脂肪率・骨格筋量の推移グラフ(スモールマルチプル)。
@@ -32,15 +33,15 @@ export const TREND_RANGES: { value: TrendRange; label: string }[] = [
 
 // dataviz スキルのリファレンスパレット(ライトモード)
 const COLOR = {
-  weight: "#2a78d6", // categorical slot 1 (blue)
-  bodyFat: "#eb6834", // categorical slot 2 (orange)
-  muscle: "#1baf7a", // categorical slot 3 (aqua)
-  surface: "#ffffff",
-  grid: "#e1e0d9",
-  axis: "#c3c2b7",
-  muted: "#898781",
-  textPrimary: "#0b0b0b",
-  textSecondary: "#52514e",
+  weight: VIZ.series1, // categorical slot 1 (blue)
+  bodyFat: VIZ.series2, // categorical slot 2 (orange)
+  muscle: VIZ.series3, // categorical slot 3 (aqua)
+  surface: VIZ.surface,
+  grid: VIZ.grid,
+  axis: VIZ.axis,
+  muted: VIZ.muted,
+  textPrimary: VIZ.textPrimary,
+  textSecondary: VIZ.textSecondary,
 } as const;
 
 type Point = { t: number; value: number; date: string };
@@ -300,13 +301,12 @@ function TrendCard({ spec }: { spec: SeriesSpec }) {
 }
 
 export default function BodyTrendCharts({
-  weightLogs,
-  inbodyLogs,
+  logs,
   range,
   onRangeChange,
 }: {
-  weightLogs: WeightLog[];
-  inbodyLogs: InbodyLog[];
+  /** Phase 4 で統合した body_logs(1 日 1 件) */
+  logs: BodyLog[];
   range: TrendRange;
   onRangeChange: (range: TrendRange) => void;
 }) {
@@ -315,34 +315,21 @@ export default function BodyTrendCharts({
     const from = rangeStart(range, today);
     const inRange = (date: string) => from == null || date >= from;
 
-    // 体重は体重記録を主にし、その日に体重記録が無ければ InBody の体重で補う
-    const weightByDate = new Map<string, number>();
-    for (const log of inbodyLogs) {
-      if (log.weight_kg != null && inRange(log.measured_date)) {
-        weightByDate.set(log.measured_date, Number(log.weight_kg));
-      }
-    }
-    for (const log of weightLogs) {
-      if (inRange(log.log_date)) {
-        weightByDate.set(log.log_date, Number(log.weight_kg));
-      }
-    }
+    const sorted = [...logs]
+      .filter((log) => inRange(log.log_date))
+      .sort((a, b) => a.log_date.localeCompare(b.log_date));
 
-    const weightPoints = [...weightByDate.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, value]) => toPoint(date, value));
+    const weightPoints = sorted
+      .filter((log) => log.weight_kg != null)
+      .map((log) => toPoint(log.log_date, Number(log.weight_kg)));
 
-    const sortedInbody = [...inbodyLogs]
-      .filter((log) => inRange(log.measured_date))
-      .sort((a, b) => a.measured_date.localeCompare(b.measured_date));
-
-    const bodyFatPoints = sortedInbody
+    const bodyFatPoints = sorted
       .filter((log) => log.body_fat_percent != null)
-      .map((log) => toPoint(log.measured_date, Number(log.body_fat_percent)));
+      .map((log) => toPoint(log.log_date, Number(log.body_fat_percent)));
 
-    const musclePoints = sortedInbody
+    const musclePoints = sorted
       .filter((log) => log.skeletal_muscle_kg != null)
-      .map((log) => toPoint(log.measured_date, Number(log.skeletal_muscle_kg)));
+      .map((log) => toPoint(log.log_date, Number(log.skeletal_muscle_kg)));
 
     return [
       {
@@ -370,7 +357,7 @@ export default function BodyTrendCharts({
         points: musclePoints,
       },
     ];
-  }, [weightLogs, inbodyLogs, range]);
+  }, [logs, range]);
 
   return (
     <div>

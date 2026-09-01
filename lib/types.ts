@@ -6,21 +6,52 @@ export type Exercise = {
   created_at: string;
 };
 
+/**
+ * ワークアウト記録(種目 1 つ分)。
+ *
+ * Phase 4 から実際の中身は子テーブル workout_sets(セットごとの重量・回数)が持つ。
+ * weight_kg / reps / sets は Phase 3 までの旧カラムで、
+ * 互換のためにセット内容から自動集計された値(最大重量・最大回数・セット数)が入る。
+ * 画面表示には使わないこと。
+ */
 export type WorkoutLog = {
   id: string;
   user_id: string;
   workout_date: string; // YYYY-MM-DD
   exercise_id: string;
+  /** @deprecated 旧カラム(セットの最大重量が自動で入る)。表示には workout_sets を使う */
   weight_kg: number;
+  /** @deprecated 旧カラム(セットの最大回数が自動で入る)。表示には workout_sets を使う */
   reps: number;
+  /** @deprecated 旧カラム(セット数が自動で入る)。表示には workout_sets を使う */
   sets: number;
   memo: string | null;
+  sort_order: number;
   created_at: string;
 };
 
-/** exercises を JOIN した表示用の型 */
+/** セットごとの記録(1セット目 80kg×10回、2セット目 80kg×8回 …) */
+export type WorkoutSet = {
+  id: string;
+  workout_log_id: string;
+  set_number: number;
+  weight_kg: number;
+  reps: number;
+  created_at: string;
+};
+
+/** exercises と workout_sets を JOIN した表示用の型 */
 export type WorkoutLogWithExercise = WorkoutLog & {
   exercises: Pick<Exercise, "id" | "name" | "muscle_group"> | null;
+  workout_sets: WorkoutSet[];
+};
+
+/** 入力中のセット(保存前は文字列で持つ) */
+export type SetInput = {
+  /** 既存セットなら DB の id、追加したセットは null */
+  id: string | null;
+  weight_kg: string;
+  reps: string;
 };
 
 export type Routine = {
@@ -97,25 +128,18 @@ export type EstimatedFoodItem = {
 // Phase 3: 体重・InBody データの記録と目標サポート
 // ------------------------------------------------------------
 
-/** 体重記録(1 日 1 件) */
-export type WeightLog = {
+/**
+ * からだの記録(1 日 1 件)。
+ *
+ * Phase 4 で weight_logs と inbody_logs を body_logs に統合した。
+ * 体重が主役(アプリ上は必須入力)で、InBody の各項目はすべて任意。
+ * weight_kg が null になり得るのは、体重の入っていない旧 InBody 記録を
+ * 取りこぼさずに移行したレコードだけ。
+ */
+export type BodyLog = {
   id: string;
   user_id: string;
   log_date: string; // YYYY-MM-DD
-  weight_kg: number;
-  memo: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-/**
- * InBody 記録(測定日ごと)。
- * 測定機器や測定内容によって入力できる項目が違うため、数値項目はすべて任意。
- */
-export type InbodyLog = {
-  id: string;
-  user_id: string;
-  measured_date: string; // YYYY-MM-DD
   weight_kg: number | null;
   body_fat_percent: number | null;
   skeletal_muscle_kg: number | null;

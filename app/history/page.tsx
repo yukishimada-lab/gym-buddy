@@ -3,14 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { formatDateLabel } from "@/lib/date";
+import { formatSets, sortLogs, sortSets } from "@/lib/workoutStats";
 import type { WorkoutLogWithExercise } from "@/lib/types";
-
-function formatDateLabel(dateStr: string) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const weekday = ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];
-  return `${y}年${m}月${d}日(${weekday})`;
-}
 
 export default function HistoryPage() {
   const [logs, setLogs] = useState<WorkoutLogWithExercise[]>([]);
@@ -20,14 +15,14 @@ export default function HistoryPage() {
   useEffect(() => {
     const supabase = createClient();
     (async () => {
-      const { data, error } = await supabase
+      const { data, error: loadError } = await supabase
         .from("workout_logs")
-        .select("*, exercises(id, name, muscle_group)")
+        .select("*, exercises(id, name, muscle_group), workout_sets(*)")
         .order("workout_date", { ascending: false })
-        .order("created_at", { ascending: true })
+        .order("sort_order", { ascending: true })
         .limit(500);
-      if (error) {
-        setError(`履歴の取得に失敗しました: ${error.message}`);
+      if (loadError) {
+        setError(`履歴の取得に失敗しました: ${loadError.message}`);
       } else {
         setLogs((data as WorkoutLogWithExercise[]) ?? []);
       }
@@ -48,7 +43,15 @@ export default function HistoryPage() {
 
   return (
     <main className="p-4">
-      <h1 className="mb-4 text-xl font-bold">📅 履歴</h1>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="text-xl font-bold">📖 履歴</h1>
+        <Link
+          href="/calendar"
+          className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 active:bg-gray-200"
+        >
+          カレンダーで見る ›
+        </Link>
+      </div>
 
       {error && (
         <p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-600">
@@ -74,17 +77,14 @@ export default function HistoryPage() {
                   <span className="text-xs text-blue-600">開く ›</span>
                 </div>
                 <ul className="space-y-1">
-                  {dayLogs.map((log) => (
-                    <li
-                      key={log.id}
-                      className="flex justify-between text-sm text-gray-700"
-                    >
-                      <span className="truncate">
+                  {sortLogs(dayLogs).map((log) => (
+                    <li key={log.id} className="text-sm">
+                      <p className="truncate text-gray-700">
                         {log.exercises?.name ?? "(削除された種目)"}
-                      </span>
-                      <span className="shrink-0 pl-2 text-gray-500">
-                        {log.weight_kg}kg × {log.reps}回 × {log.sets}set
-                      </span>
+                      </p>
+                      <p className="truncate text-xs tabular-nums text-gray-500">
+                        {formatSets(sortSets(log.workout_sets ?? []))}
+                      </p>
                     </li>
                   ))}
                 </ul>

@@ -14,7 +14,7 @@ import {
 } from "@/lib/bodyAnalysis";
 import type { BodyGoal, GoalMode } from "@/lib/types";
 
-const PHASE3_SETUP_HINT = "(supabase/phase3.sql を実行済みか確認してください)";
+const PHASE4_SETUP_HINT = "(supabase/phase4.sql を実行済みか確認してください)";
 
 const MODES: { value: GoalMode; label: string; icon: string }[] = [
   { value: "bulk", label: "増量", icon: "📈" },
@@ -113,7 +113,7 @@ export default function BodyGoalPage() {
       .select("*")
       .maybeSingle();
     if (goalError) {
-      setError(`目標の取得に失敗しました: ${goalError.message}${PHASE3_SETUP_HINT}`);
+      setError(`目標の取得に失敗しました: ${goalError.message}${PHASE4_SETUP_HINT}`);
       return;
     }
     const goal = (goalRow as BodyGoal | null) ?? null;
@@ -136,7 +136,7 @@ export default function BodyGoalPage() {
       setError(
         `分析データの取得に失敗しました: ${
           e instanceof Error ? e.message : String(e)
-        }${PHASE3_SETUP_HINT}`
+        }${PHASE4_SETUP_HINT}`
       );
     }
   }, []);
@@ -178,7 +178,7 @@ export default function BodyGoalPage() {
       { onConflict: "user_id" }
     );
     if (upsertError) {
-      setError(`目標の保存に失敗しました: ${upsertError.message}${PHASE3_SETUP_HINT}`);
+      setError(`目標の保存に失敗しました: ${upsertError.message}${PHASE4_SETUP_HINT}`);
     } else {
       setNotice("目標を保存しました。");
       await load();

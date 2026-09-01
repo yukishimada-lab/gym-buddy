@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const tabs = [
   { href: "/", label: "記録", icon: "✏️" },
   { href: "/meals", label: "食事", icon: "🍽️" },
+  { href: "/body", label: "からだ", icon: "⚖️" },
   { href: "/history", label: "履歴", icon: "📅" },
   { href: "/exercises", label: "種目", icon: "🏋️" },
   { href: "/routines", label: "ルーティン", icon: "📋" },
@@ -24,12 +25,12 @@ export default function BottomNav() {
             <Link
               key={tab.href}
               href={tab.href}
-              className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-xs ${
+              className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2 text-[10px] leading-tight ${
                 active ? "font-bold text-blue-600" : "text-gray-500"
               }`}
             >
               <span className="text-lg leading-none">{tab.icon}</span>
-              {tab.label}
+              <span className="whitespace-nowrap">{tab.label}</span>
             </Link>
           );
         })}

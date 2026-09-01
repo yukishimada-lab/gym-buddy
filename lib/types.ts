@@ -92,3 +92,87 @@ export type EstimatedFoodItem = {
   carbs_g: number;
   calories: number;
 };
+
+// ------------------------------------------------------------
+// Phase 3: 体重・InBody データの記録と目標サポート
+// ------------------------------------------------------------
+
+/** 体重記録(1 日 1 件) */
+export type WeightLog = {
+  id: string;
+  user_id: string;
+  log_date: string; // YYYY-MM-DD
+  weight_kg: number;
+  memo: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * InBody 記録(測定日ごと)。
+ * 測定機器や測定内容によって入力できる項目が違うため、数値項目はすべて任意。
+ */
+export type InbodyLog = {
+  id: string;
+  user_id: string;
+  measured_date: string; // YYYY-MM-DD
+  weight_kg: number | null;
+  body_fat_percent: number | null;
+  skeletal_muscle_kg: number | null;
+  body_fat_mass_kg: number | null;
+  bmr_kcal: number | null;
+  body_water_l: number | null;
+  memo: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 目標のモード */
+export type GoalMode = "bulk" | "cut" | "maintain";
+
+/** 目標設定(1 ユーザー 1 件) */
+export type BodyGoal = {
+  id: string;
+  user_id: string;
+  mode: GoalMode;
+  target_weight_kg: number | null;
+  target_body_fat_percent: number | null;
+  target_date: string | null; // YYYY-MM-DD
+  memo: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 推移グラフ 1 点分(値が無い日は null にして線を途切れさせる) */
+export type BodyTrendPoint = {
+  date: string; // YYYY-MM-DD
+  weight_kg: number | null;
+  body_fat_percent: number | null;
+  skeletal_muscle_kg: number | null;
+};
+
+/** 目標サポート分析に渡す、集計済みの数値データ */
+export type GoalAnalysisInput = {
+  goal: {
+    mode: GoalMode;
+    target_weight_kg: number | null;
+    target_body_fat_percent: number | null;
+    target_date: string | null;
+  };
+  /** 直近の体重(日付昇順) */
+  weights: { date: string; weight_kg: number }[];
+  /** 直近の体脂肪率(日付昇順・記録がある日のみ) */
+  bodyFats: { date: string; body_fat_percent: number }[];
+  /** 直近の基礎代謝量(kcal / InBody 由来・最新値) */
+  bmrKcal: number | null;
+  /** 直近の食事記録の日別集計(記録がある日のみ) */
+  dailyNutrition: {
+    date: string;
+    calories: number;
+    protein_g: number;
+    fat_g: number;
+    carbs_g: number;
+  }[];
+  /** 直近 28 日でトレーニングした日数 */
+  workoutDaysLast28: number;
+};

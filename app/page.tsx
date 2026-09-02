@@ -13,12 +13,14 @@ import {
   buildPreviousRecordMap,
   compareWithPrevious,
   formatWeight,
+  hasWeight,
   maxWeight,
   sortLogs,
   sortSets,
   totalVolume,
   type PreviousRecord,
 } from "@/lib/workoutStats";
+import { normalizeMuscleGroup } from "@/lib/muscleGroups";
 import type {
   Exercise,
   RoutineWithItems,
@@ -278,6 +280,17 @@ function RecordPage() {
     }
   };
 
+  /**
+   * ルーティンをその日の記録に展開する。
+   *
+   * 展開したセットの重量は次の優先順位で決める。
+   * 1. ルーティンに設定した目標重量
+   * 2. その種目の直近の記録(前回と同じ重量から始めることが多いため)
+   * 3. どちらも無ければ 0kg(= 重量未入力。画面では「重量なし」と表示する)
+   *
+   * 以前は 1 が未設定だと無条件に 0kg のセットを作っていたため、
+   * 記録が「3セット・最大 0kg」のまま残ってしまっていた。
+   */
   const applyRoutine = async () => {
     const routine = routines.find((r) => r.id === routineId);
     if (!routine || routine.routine_items.length === 0) return;
@@ -292,9 +305,60 @@ function RecordPage() {
       return;
     }
 
-    const items = [...routine.routine_items].sort(
+    let items = [...routine.routine_items].sort(
       (a, b) => a.sort_order - b.sort_order
     );
+
+    // すでにその日に記録がある種目は、うっかり二重に展開しないよう確認する
+    const recordedIds = new Set(logs.map((l) => l.exercise_id));
+    const duplicated = items.filter((item) => recordedIds.has(item.exercise_id));
+    if (duplicated.length > 0) {
+      const names = duplicated
+        .map((item) => item.exercises?.name ?? "(削除された種目)")
+        .join("・");
+      const addAnyway = confirm(
+        `${names} はすでにこの日に記録があります。\n\n` +
+          "OK: そのまま重複して追加する\n" +
+          "キャンセル: まだ記録がない種目だけを追加する"
+      );
+      if (!addAnyway) {
+        items = items.filter((item) => !recordedIds.has(item.exercise_id));
+      }
+    }
+    if (items.length === 0) {
+      setRoutineId("");
+      setApplying(false);
+      return;
+    }
+
+    // 目標重量が未設定の種目のために、直近の記録を引いておく
+    const missingWeightIds = [
+      ...new Set(
+        items
+          .filter((item) => item.default_weight_kg == null)
+          .map((item) => item.exercise_id)
+      ),
+    ];
+    let previousByExercise = new Map<string, PreviousRecord>();
+    if (missingWeightIds.length > 0) {
+      const { data: prevData } = await supabase
+        .from("workout_logs")
+        .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+        .in("exercise_id", missingWeightIds)
+        .lt("workout_date", date)
+        .order("workout_date", { ascending: false })
+        .limit(200);
+      previousByExercise = buildPreviousRecordMap(
+        (prevData as
+          | {
+              exercise_id: string;
+              workout_date: string;
+              workout_sets: WorkoutSet[] | null;
+            }[]
+          | null) ?? []
+      );
+    }
+
     const maxOrder = logs.reduce((m, l) => Math.max(m, l.sort_order), 0);
 
     const { data: inserted, error: insertError } = await supabase
@@ -327,10 +391,37 @@ function RecordPage() {
     const setRows = sorted.flatMap((row, index) => {
       const item = items[index];
       const count = Math.max(item?.default_sets ?? 1, 1);
+
+      if (item?.default_weight_kg != null) {
+        return Array.from({ length: count }, (_, i) => ({
+          workout_log_id: row.id,
+          set_number: i + 1,
+          weight_kg: Number(item.default_weight_kg) || 0,
+          reps: item.default_reps ?? 0,
+        }));
+      }
+
+      // 目標重量が未設定なら、その種目の前回の記録をそのまま初期値にする
+      const previous = previousByExercise.get(row.exercise_id);
+      if (previous && previous.sets.length > 0) {
+        const prevSets = sortSets(
+          previous.sets as { set_number: number; weight_kg: number; reps: number }[]
+        );
+        return Array.from({ length: Math.max(count, prevSets.length) }, (_, i) => {
+          const source = prevSets[i] ?? prevSets[prevSets.length - 1];
+          return {
+            workout_log_id: row.id,
+            set_number: i + 1,
+            weight_kg: Number(source.weight_kg) || 0,
+            reps: Number(source.reps) || item?.default_reps || 0,
+          };
+        });
+      }
+
       return Array.from({ length: count }, (_, i) => ({
         workout_log_id: row.id,
         set_number: i + 1,
-        weight_kg: Number(item?.default_weight_kg ?? 0) || 0,
+        weight_kg: 0,
         reps: item?.default_reps ?? 0,
       }));
     });
@@ -487,6 +578,12 @@ function RecordPage() {
                       <div className="flex items-start justify-between gap-1">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           {dragHandle}
+                          <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">
+                            {normalizeMuscleGroup(
+                              log.exercises?.muscle_group,
+                              log.exercises?.name ?? undefined
+                            )}
+                          </span>
                           <p className="min-w-0 truncate font-semibold">
                             {log.exercises?.name ?? "(削除された種目)"}
                           </p>
@@ -525,7 +622,13 @@ function RecordPage() {
                                 {i + 1}set
                               </span>
                               <span className="tabular-nums text-gray-700">
-                                {formatWeight(Number(s.weight_kg))}kg ×{" "}
+                                {Number(s.weight_kg) > 0 ? (
+                                  <>
+                                    {formatWeight(Number(s.weight_kg))}kg ×{" "}
+                                  </>
+                                ) : (
+                                  <span className="text-gray-400">重量なし × </span>
+                                )}
                                 {Number(s.reps)}回
                               </span>
                             </li>
@@ -538,6 +641,7 @@ function RecordPage() {
                           comparison={comparison}
                           maxWeight={maxWeight(sets)}
                           totalVolume={totalVolume(sets)}
+                          weightless={sets.length > 0 && !hasWeight(sets)}
                         />
                       </div>
                     </div>

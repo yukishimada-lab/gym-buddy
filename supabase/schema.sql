@@ -14,7 +14,7 @@ create table if not exists public.exercises (
   id           uuid primary key default gen_random_uuid(),
   user_id      uuid not null references auth.users (id) on delete cascade,
   name         text not null,
-  muscle_group text,                    -- 部位(胸・背中・脚・肩・腕・腹 など)
+  muscle_group text,                    -- 部位(胸 / 背中 / 肩 / 腕 / 脚 / 体幹 / 有酸素 / その他)
   created_at   timestamptz not null default now()
 );
 
@@ -188,9 +188,6 @@ begin
     (new.id, 'ベンチプレス', '胸'),
     (new.id, 'ダンベルフライ', '胸'),
     (new.id, 'インクラインベンチプレス', '胸'),
-    (new.id, 'スクワット', '脚'),
-    (new.id, 'レッグプレス', '脚'),
-    (new.id, 'レッグカール', '脚'),
     (new.id, 'デッドリフト', '背中'),
     (new.id, 'ラットプルダウン', '背中'),
     (new.id, 'ベントオーバーロー', '背中'),
@@ -198,8 +195,11 @@ begin
     (new.id, 'サイドレイズ', '肩'),
     (new.id, 'バーベルカール', '腕'),
     (new.id, 'トライセプスエクステンション', '腕'),
-    (new.id, 'アブローラー', '腹'),
-    (new.id, 'プランク', '腹');
+    (new.id, 'スクワット', '脚'),
+    (new.id, 'レッグプレス', '脚'),
+    (new.id, 'レッグカール', '脚'),
+    (new.id, 'アブローラー', '体幹'),
+    (new.id, 'プランク', '体幹');
   return new;
 end;
 $$;

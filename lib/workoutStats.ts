@@ -46,6 +46,30 @@ export function summarize(sets: SetLike[]): WorkoutSummary {
   };
 }
 
+/** 1 セットでも重量が入っているか(自重種目・重量未入力の判定に使う) */
+export function hasWeight(sets: SetLike[]): boolean {
+  return sets.some((s) => (Number(s.weight_kg) || 0) > 0);
+}
+
+/**
+ * 記録 1 件を要約した 1 行(「3セット · 最大80kg · 総ボリューム1,920kg」)。
+ *
+ * 数値が何を指すのか分かるようにラベルを必ず付ける。
+ * 重量が 1 セットも入っていない記録(自重種目 / ルーティンを展開しただけで
+ * 重量を入れていない記録)で「最大 0kg · 0kg」と出すと誤解を招くので、
+ * その場合は重量ではなく回数で要約する。
+ */
+export function summaryLine(sets: SetLike[]): string {
+  if (sets.length === 0) return "セット未入力";
+  const setText = `${sets.length}セット`;
+  if (!hasWeight(sets)) {
+    return `${setText} · 重量なし · 計${formatNumber(totalReps(sets))}回`;
+  }
+  return `${setText} · 最大${formatWeight(maxWeight(sets))}kg · 総ボリューム${formatNumber(
+    totalVolume(sets)
+  )}kg`;
+}
+
 /** 前回比の向き。前回記録が無い / 同値のときは色を付けない */
 export type TrendDirection = "up" | "down" | "same";
 
@@ -125,9 +149,15 @@ export function buildPreviousRecordMap(
   return map;
 }
 
-/** 記録 1 件を「80kg×10回 / 80kg×8回 / 70kg×8回」のような文字列にする */
+/**
+ * 記録 1 件を「80kg×10回 / 80kg×8回 / 70kg×8回」のような文字列にする。
+ * 重量がまったく入っていない記録は「0kg×10回」だと誤解を招くので回数だけを出す。
+ */
 export function formatSets(sets: SetLike[]): string {
   if (sets.length === 0) return "セット未入力";
+  if (!hasWeight(sets)) {
+    return `${sets.map((s) => `${Number(s.reps)}回`).join(" / ")}(重量なし)`;
+  }
   return sets
     .map((s) => `${formatWeight(Number(s.weight_kg))}kg×${Number(s.reps)}回`)
     .join(" / ");

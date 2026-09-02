@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateLabel } from "@/lib/date";
-import { formatSets, sortLogs, sortSets } from "@/lib/workoutStats";
+import { formatSets, sortLogs, sortSets, summaryLine } from "@/lib/workoutStats";
+import { normalizeMuscleGroup } from "@/lib/muscleGroups";
 import type { WorkoutLogWithExercise } from "@/lib/types";
 
 export default function HistoryPage() {
@@ -79,11 +80,22 @@ export default function HistoryPage() {
                 <ul className="space-y-1">
                   {sortLogs(dayLogs).map((log) => (
                     <li key={log.id} className="text-sm">
-                      <p className="truncate text-gray-700">
-                        {log.exercises?.name ?? "(削除された種目)"}
+                      <p className="flex items-center gap-1.5 truncate text-gray-700">
+                        <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">
+                          {normalizeMuscleGroup(
+                            log.exercises?.muscle_group,
+                            log.exercises?.name ?? undefined
+                          )}
+                        </span>
+                        <span className="truncate">
+                          {log.exercises?.name ?? "(削除された種目)"}
+                        </span>
                       </p>
                       <p className="truncate text-xs tabular-nums text-gray-500">
                         {formatSets(sortSets(log.workout_sets ?? []))}
+                      </p>
+                      <p className="truncate text-xs tabular-nums text-gray-400">
+                        {summaryLine(sortSets(log.workout_sets ?? []))}
                       </p>
                     </li>
                   ))}

@@ -14,15 +14,15 @@ import {
   todayString,
   type YearMonth,
 } from "@/lib/date";
-import {
-  formatNumber,
-  formatWeight,
-  maxWeight,
-  sortLogs,
-  sortSets,
-  totalVolume,
-} from "@/lib/workoutStats";
-import type { MealLog, WorkoutLogWithExercise } from "@/lib/types";
+import { formatNumber, sortLogs, sortSets, summaryLine } from "@/lib/workoutStats";
+import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
+import ShareDaySummary from "@/components/ShareDaySummary";
+import type {
+  BodyLog,
+  DaySummary,
+  MealLog,
+  WorkoutLogWithExercise,
+} from "@/lib/types";
 
 /**
  * 月表示のカレンダー。
@@ -59,7 +59,8 @@ function MealMark() {
   );
 }
 
-type DaySummary = { workout: boolean; meal: boolean };
+/** カレンダーのマス目に出すマーク(記録の有無だけ) */
+type DayMarks = { workout: boolean; meal: boolean };
 
 function CalendarPage() {
   const searchParams = useSearchParams();
@@ -70,13 +71,14 @@ function CalendarPage() {
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
   });
   const [selected, setSelected] = useState<string>(initialDate);
-  const [summary, setSummary] = useState<Map<string, DaySummary>>(new Map());
+  const [summary, setSummary] = useState<Map<string, DayMarks>>(new Map());
   const [loadingMonth, setLoadingMonth] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // 選択した日の詳細
   const [dayLogs, setDayLogs] = useState<WorkoutLogWithExercise[]>([]);
   const [dayMeals, setDayMeals] = useState<MealLog[]>([]);
+  const [dayBody, setDayBody] = useState<BodyLog | null>(null);
   const [loadingDay, setLoadingDay] = useState(false);
 
   const today = todayString();
@@ -109,8 +111,8 @@ function CalendarPage() {
       return;
     }
 
-    const map = new Map<string, DaySummary>();
-    const mark = (date: string, key: keyof DaySummary) => {
+    const map = new Map<string, DayMarks>();
+    const mark = (date: string, key: keyof DayMarks) => {
       const current = map.get(date) ?? { workout: false, meal: false };
       current[key] = true;
       map.set(date, current);
@@ -130,15 +132,19 @@ function CalendarPage() {
   const loadDay = useCallback(async (date: string) => {
     setLoadingDay(true);
     const supabase = createClient();
-    const [logRes, mealRes] = await Promise.all([
+    // 食事・からだは Phase 2 / 3 が未セットアップでも落ちないよう、エラーは無視して
+    // 「記録なし」として扱う(トレーニングだけは失敗をエラー表示する)
+    const [logRes, mealRes, bodyRes] = await Promise.all([
       supabase
         .from("workout_logs")
         .select("*, exercises(id, name, muscle_group), workout_sets(*)")
         .eq("workout_date", date),
       supabase.from("meal_logs").select("*").eq("meal_date", date),
+      supabase.from("body_logs").select("*").eq("log_date", date).maybeSingle(),
     ]);
     setDayLogs(sortLogs((logRes.data as WorkoutLogWithExercise[]) ?? []));
     setDayMeals((mealRes.data as MealLog[]) ?? []);
+    setDayBody((bodyRes.data as BodyLog | null) ?? null);
     setLoadingDay(false);
   }, []);
 
@@ -163,13 +169,49 @@ function CalendarPage() {
     }
   };
 
-  const mealTotal = dayMeals.reduce(
-    (acc, m) => ({
-      calories: acc.calories + Number(m.calories),
-      protein_g: acc.protein_g + Number(m.protein_g),
-    }),
-    { calories: 0, protein_g: 0 }
+  const mealTotal = useMemo(
+    () =>
+      dayMeals.reduce(
+        (acc, m) => ({
+          calories: acc.calories + Number(m.calories),
+          protein_g: acc.protein_g + Number(m.protein_g),
+          fat_g: acc.fat_g + Number(m.fat_g),
+          carbs_g: acc.carbs_g + Number(m.carbs_g),
+        }),
+        { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 }
+      ),
+    [dayMeals]
   );
+
+  /**
+   * その日の種目を部位ごとのセクションにまとめる。
+   * 部位は「胸 → 背中 → 肩 → 腕 → 脚 → 体幹 → 有酸素 → その他」の固定順。
+   * 種目マスタの部位が未設定でも、種目名から推定して振り分ける。
+   */
+  const sections = useMemo(
+    () =>
+      groupByMuscleGroup(dayLogs, (log) =>
+        normalizeMuscleGroup(
+          log.exercises?.muscle_group,
+          log.exercises?.name ?? undefined
+        )
+      ),
+    [dayLogs]
+  );
+
+  const daySummary: DaySummary = useMemo(
+    () => ({
+      date: selected,
+      sections,
+      meals: dayMeals,
+      nutrition: mealTotal,
+      body: dayBody,
+    }),
+    [selected, sections, dayMeals, mealTotal, dayBody]
+  );
+
+  const hasAnyRecord =
+    dayLogs.length > 0 || dayMeals.length > 0 || dayBody !== null;
 
   return (
     <main className="p-4">
@@ -297,32 +339,47 @@ function CalendarPage() {
         ) : (
           <>
             <div className="mb-3">
-              <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-gray-600">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-600">
                 <WorkoutMark />
                 トレーニング({dayLogs.length}種目)
               </p>
               {dayLogs.length === 0 ? (
                 <p className="text-sm text-gray-400">記録がありません</p>
               ) : (
-                <ul className="space-y-1">
-                  {dayLogs.map((log) => {
-                    const sets = sortSets(log.workout_sets ?? []);
-                    return (
-                      <li
-                        key={log.id}
-                        className="flex justify-between gap-2 text-sm"
+                /* 部位ごとにセクション分けする(何をやった日か一目で分かるように) */
+                <div className="space-y-3">
+                  {sections.map((section) => (
+                    <div key={section.group}>
+                      <h3
+                        className="mb-1 border-l-4 pl-2 text-xs font-bold"
+                        style={{
+                          borderColor: MARK.workout.color,
+                          color: VIZ.textPrimary,
+                        }}
                       >
-                        <span className="min-w-0 truncate text-gray-700">
-                          {log.exercises?.name ?? "(削除された種目)"}
+                        {section.group}
+                        <span className="ml-1 font-normal text-gray-500">
+                          ({section.items.length}種目)
                         </span>
-                        <span className="shrink-0 text-xs tabular-nums text-gray-500">
-                          {sets.length}set · 最大 {formatWeight(maxWeight(sets))}kg
-                          · {formatNumber(totalVolume(sets))}kg
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                      </h3>
+                      <ul className="space-y-1">
+                        {section.items.map((log) => (
+                          <li key={log.id} className="text-sm">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="min-w-0 truncate text-gray-700">
+                                {log.exercises?.name ?? "(削除された種目)"}
+                              </span>
+                            </div>
+                            {/* 数値が何を指すのかラベルを付ける */}
+                            <p className="text-xs tabular-nums text-gray-500">
+                              {summaryLine(sortSets(log.workout_sets ?? []))}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -335,10 +392,36 @@ function CalendarPage() {
                 <p className="text-sm text-gray-400">記録がありません</p>
               ) : (
                 <p className="text-sm tabular-nums text-gray-700">
-                  {formatNumber(mealTotal.calories)}kcal · タンパク質{" "}
-                  {formatNumber(mealTotal.protein_g, 1)}g
+                  {formatNumber(mealTotal.calories)}kcal · P{" "}
+                  {formatNumber(mealTotal.protein_g, 1)}g / F{" "}
+                  {formatNumber(mealTotal.fat_g, 1)}g / C{" "}
+                  {formatNumber(mealTotal.carbs_g, 1)}g
                 </p>
               )}
+            </div>
+
+            {dayBody && (
+              <div className="mb-3">
+                <p className="mb-1 text-xs font-semibold text-gray-600">
+                  からだ
+                </p>
+                <p className="text-sm tabular-nums text-gray-700">
+                  {[
+                    dayBody.weight_kg != null &&
+                      `体重 ${formatNumber(Number(dayBody.weight_kg), 1)}kg`,
+                    dayBody.body_fat_percent != null &&
+                      `体脂肪率 ${formatNumber(Number(dayBody.body_fat_percent), 1)}%`,
+                    dayBody.skeletal_muscle_kg != null &&
+                      `骨格筋量 ${formatNumber(Number(dayBody.skeletal_muscle_kg), 1)}kg`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "記録あり"}
+                </p>
+              </div>
+            )}
+
+            <div className="mb-2">
+              <ShareDaySummary summary={daySummary} disabled={!hasAnyRecord} />
             </div>
 
             <div className="flex gap-2">

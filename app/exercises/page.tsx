@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { DEFAULT_EXERCISES, MUSCLE_GROUPS } from "@/lib/defaultExercises";
+import { DEFAULT_EXERCISES } from "@/lib/defaultExercises";
+import {
+  MUSCLE_GROUPS,
+  groupByMuscleGroup,
+  normalizeMuscleGroup,
+} from "@/lib/muscleGroups";
 import type { Exercise } from "@/lib/types";
 
 export default function ExercisesPage() {
@@ -11,11 +16,13 @@ export default function ExercisesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
-  const [muscleGroup, setMuscleGroup] = useState(MUSCLE_GROUPS[0]);
+  const [muscleGroup, setMuscleGroup] = useState<string>(MUSCLE_GROUPS[0]);
   const [saving, setSaving] = useState(false);
-  const [editing, setEditing] = useState<{ id: string; name: string } | null>(
-    null
-  );
+  const [editing, setEditing] = useState<{
+    id: string;
+    name: string;
+    muscle_group: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -80,12 +87,15 @@ export default function ExercisesPage() {
     setSaving(false);
   };
 
-  const renameExercise = async () => {
+  const saveExercise = async () => {
     if (!editing || !editing.name.trim()) return;
     const supabase = createClient();
     const { error } = await supabase
       .from("exercises")
-      .update({ name: editing.name.trim() })
+      .update({
+        name: editing.name.trim(),
+        muscle_group: editing.muscle_group,
+      })
       .eq("id", editing.id);
     if (error) {
       setError(`更新に失敗しました: ${error.message}`);
@@ -111,14 +121,10 @@ export default function ExercisesPage() {
     }
   };
 
-  // 部位ごとにグループ化
-  const grouped = exercises.reduce<Map<string, Exercise[]>>((map, ex) => {
-    const key = ex.muscle_group ?? "その他";
-    const list = map.get(key) ?? [];
-    list.push(ex);
-    map.set(key, list);
-    return map;
-  }, new Map());
+  // 部位ごとにグループ化(表示順は 胸 → 背中 → 肩 → 腕 → 脚 → 体幹 → 有酸素 → その他)
+  const grouped = groupByMuscleGroup(exercises, (ex) =>
+    normalizeMuscleGroup(ex.muscle_group, ex.name)
+  );
 
   return (
     <main className="p-4">
@@ -181,47 +187,84 @@ export default function ExercisesPage() {
           </button>
         </div>
       ) : (
-        [...grouped.entries()].map(([group, list]) => (
+        grouped.map(({ group, items }) => (
           <section key={group} className="mb-4">
             <h2 className="mb-2 text-sm font-semibold text-gray-600">
               {group}
+              <span className="ml-1 font-normal text-gray-400">
+                ({items.length}種目)
+              </span>
             </h2>
             <ul className="space-y-2">
-              {list.map((ex) => (
+              {items.map((ex) => (
                 <li
                   key={ex.id}
                   className="flex items-center justify-between gap-2 rounded-xl bg-white p-3 shadow-sm"
                 >
                   {editing?.id === ex.id ? (
-                    <>
-                      <input
-                        type="text"
-                        value={editing.name}
-                        onChange={(e) =>
-                          setEditing({ ...editing, name: e.target.value })
-                        }
-                        className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-1.5"
-                      />
-                      <button
-                        onClick={renameExercise}
-                        className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white active:opacity-80"
-                      >
-                        保存
-                      </button>
-                      <button
-                        onClick={() => setEditing(null)}
-                        className="shrink-0 rounded-lg bg-gray-200 px-3 py-1.5 text-sm active:opacity-80"
-                      >
-                        戻る
-                      </button>
-                    </>
+                    <div className="w-full">
+                      <div className="mb-2 flex gap-2">
+                        <label
+                          htmlFor={`muscle-${ex.id}`}
+                          className="sr-only"
+                        >
+                          部位
+                        </label>
+                        <select
+                          id={`muscle-${ex.id}`}
+                          value={editing.muscle_group}
+                          onChange={(e) =>
+                            setEditing({
+                              ...editing,
+                              muscle_group: e.target.value,
+                            })
+                          }
+                          className="w-24 shrink-0 rounded-lg border border-gray-300 px-2 py-1.5"
+                        >
+                          {MUSCLE_GROUPS.map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={editing.name}
+                          onChange={(e) =>
+                            setEditing({ ...editing, name: e.target.value })
+                          }
+                          className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-1.5"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={saveExercise}
+                          className="flex-1 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white active:opacity-80"
+                        >
+                          保存
+                        </button>
+                        <button
+                          onClick={() => setEditing(null)}
+                          className="flex-1 rounded-lg bg-gray-200 px-3 py-1.5 text-sm active:opacity-80"
+                        >
+                          戻る
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <>
                       <span className="truncate font-medium">{ex.name}</span>
                       <div className="flex shrink-0 gap-1">
                         <button
                           onClick={() =>
-                            setEditing({ id: ex.id, name: ex.name })
+                            setEditing({
+                              id: ex.id,
+                              name: ex.name,
+                              muscle_group: normalizeMuscleGroup(
+                                ex.muscle_group,
+                                ex.name
+                              ),
+                            })
                           }
                           className="rounded-lg bg-gray-100 px-3 py-1.5 text-sm active:bg-gray-200"
                         >

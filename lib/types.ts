@@ -200,3 +200,33 @@ export type GoalAnalysisInput = {
   /** 直近 28 日でトレーニングした日数 */
   workoutDaysLast28: number;
 };
+
+// ------------------------------------------------------------
+// Phase 5: 1 日のサマリー(カレンダーの日別詳細・共有画像で共通に使う)
+// ------------------------------------------------------------
+
+/** 部位ごとにまとめたトレーニング記録 */
+export type MuscleGroupSection = {
+  group: string;
+  items: WorkoutLogWithExercise[];
+};
+
+/** 食事の日別合計 */
+export type NutritionTotals = {
+  calories: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+};
+
+/**
+ * 共有画像 1 枚分のデータ。
+ * 「その日に記録がある項目だけを載せる」ため、無い項目は空配列 / null にする。
+ */
+export type DaySummary = {
+  date: string; // YYYY-MM-DD
+  sections: MuscleGroupSection[];
+  meals: MealLog[];
+  nutrition: NutritionTotals;
+  body: BodyLog | null;
+};

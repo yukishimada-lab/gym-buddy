@@ -70,12 +70,24 @@ export default function TrendBadges({
   comparison,
   maxWeight,
   totalVolume,
+  weightless,
 }: {
   /** 前回記録が無ければ null(色を付けずに「前回記録なし」と出す) */
   comparison: WorkoutComparison | null;
   maxWeight: number;
   totalVolume: number;
+  /** 重量が 1 セットも入っていない記録(自重種目 / 重量未入力) */
+  weightless?: boolean;
 }) {
+  // 重量の入っていない記録で「最大 0kg」と出すと誤解を招くので比較自体を出さない
+  if (weightless) {
+    return (
+      <p className="mt-1.5 text-xs" style={{ color: VIZ.muted }}>
+        重量が未入力です(自重種目ならそのままで OK)
+      </p>
+    );
+  }
+
   if (!comparison) {
     return (
       <p className="mt-1.5 text-xs" style={{ color: VIZ.muted }}>

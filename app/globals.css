@@ -24,3 +24,29 @@ select,
 textarea {
   font-size: 16px;
 }
+
+/* ---- ホーム画面に追加したとき(PWA)の表示調整 ---- */
+
+html {
+  /* 横向きにしたときに iOS が勝手に文字を大きくするのを防ぐ */
+  -webkit-text-size-adjust: 100%;
+  /* ページ全体の引っ張り(バウンス)と、その先の更新動作を止める */
+  overscroll-behavior-y: none;
+}
+
+body {
+  overscroll-behavior-y: none;
+  /* タップしたときの灰色のハイライトを消してネイティブアプリらしくする */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 操作用の要素は長押しで文字が選択されないようにする(本文の選択は妨げない) */
+button,
+a,
+label,
+nav,
+summary {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

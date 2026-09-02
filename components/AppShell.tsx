@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import BottomNav from "@/components/BottomNav";
+import InstallPrompt from "@/components/InstallPrompt";
 
 /**
  * 全ページ共通のシェル。
@@ -26,10 +27,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (!isSupabaseConfigured) return;
     const supabase = createClient();
 
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user ?? null);
-      setLoading(false);
-    });
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        setUser(data.user ?? null);
+        setLoading(false);
+      })
+      // オフラインなどで問い合わせ自体が失敗しても、
+      // 「読み込み中...」のまま固まらないようにする。
+      // 実際のログイン状態は下の onAuthStateChange が拾い直す。
+      .catch(() => setLoading(false));
 
     const {
       data: { subscription },
@@ -75,10 +82,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const showBottomNav = Boolean(user) && !isPublicPath;
+
   return (
-    <div className="mx-auto min-h-dvh max-w-md">
-      <div className={user && !isPublicPath ? "pb-20" : ""}>{children}</div>
-      {user && !isPublicPath && <BottomNav />}
+    // ノッチ側(上・左右)はここでまとめて避ける。
+    // 下側はボトムナビと各画面の固定要素が個別に env(safe-area-inset-bottom) を見ている。
+    <div className="mx-auto min-h-dvh max-w-md pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+      <div
+        className={
+          showBottomNav ? "pb-[calc(env(safe-area-inset-bottom)+5rem)]" : ""
+        }
+      >
+        {children}
+      </div>
+      {showBottomNav && <BottomNav />}
+      <InstallPrompt hasBottomNav={showBottomNav} />
     </div>
   );
 }

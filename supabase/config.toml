@@ -1,0 +1,6 @@
+# Supabase CLI の設定ファイル
+# 本番へのマイグレーション適用 (supabase db push) に必要な最小限の設定だけを置いています。
+# 記載のない項目は CLI の既定値が使われます。
+# 参考: https://supabase.com/docs/guides/local-development/cli/config
+
+project_id = "gym-buddy"

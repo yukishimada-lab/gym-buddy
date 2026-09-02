@@ -1,0 +1,138 @@
+# ============================================================
+# 本番 Supabase へのマイグレーション自動適用
+#
+# main ブランチの supabase/ 配下が変わったときに、
+# supabase/migrations/ の未適用マイグレーションを本番へ流します。
+# 手動実行(Run workflow)もできます。
+#
+# 必要なシークレット(GitHub の Settings → Secrets and variables → Actions):
+#   SUPABASE_ACCESS_TOKEN  … https://supabase.com/dashboard/account/tokens で発行
+#   SUPABASE_DB_PASSWORD   … Supabase の Settings → Database のパスワード
+#   SUPABASE_PROJECT_REF   … 本番プロジェクトの ref(ダッシュボードの URL に含まれる 20 文字)
+# 詳しい手順は README.md の「DB マイグレーションの運用」を参照してください。
+#
+# ※ このワークフローは Vercel のデプロイとは独立しています。
+#    ここが失敗しても Vercel のデプロイは止まりません(逆も同じ)。
+# ============================================================
+name: Supabase migrations
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/**"
+      - ".github/workflows/supabase-migrations.yml"
+  workflow_dispatch:
+    inputs:
+      skip_baseline:
+        description: "既存スキーマの適用済み登録(baseline)をスキップする(まっさらな Supabase プロジェクトに流すときは true)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: supabase-migrations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push-migrations:
+    name: supabase db push
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF || vars.SUPABASE_PROJECT_REF }}
+      # 本番 Supabase に手作業(SQL Editor へのコピペ)で適用済みの Phase 1〜4。
+      # マイグレーション履歴がまだ空のときだけ「適用済み」として登録し、
+      # 既存のテーブルを作り直そうとしないようにします。
+      # 一度登録されれば以降このリストは使われないので、
+      # 今後マイグレーションを追加してもここに足す必要はありません。
+      BASELINE_VERSIONS: "20260901035412 20260901130705 20260901164549 20260901185522"
+
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: 必要なシークレットが設定されているか確認
+        run: |
+          missing=""
+          [ -n "${SUPABASE_ACCESS_TOKEN}" ] || missing="${missing} SUPABASE_ACCESS_TOKEN"
+          [ -n "${SUPABASE_DB_PASSWORD}" ]  || missing="${missing} SUPABASE_DB_PASSWORD"
+          [ -n "${SUPABASE_PROJECT_REF}" ]  || missing="${missing} SUPABASE_PROJECT_REF"
+
+          if [ -n "${missing}" ]; then
+            {
+              echo "## ⚠️ マイグレーションを適用できませんでした"
+              echo
+              echo "必要なシークレットが設定されていません:"
+              for name in ${missing}; do echo "- \`${name}\`"; done
+              echo
+              echo "GitHub リポジトリの **Settings → Secrets and variables → Actions → New repository secret** から登録してください。"
+              echo
+              echo "| シークレット | 取得場所 |"
+              echo "| --- | --- |"
+              echo "| \`SUPABASE_ACCESS_TOKEN\` | https://supabase.com/dashboard/account/tokens |"
+              echo "| \`SUPABASE_DB_PASSWORD\` | Supabase ダッシュボード → Settings → Database |"
+              echo "| \`SUPABASE_PROJECT_REF\` | Supabase ダッシュボードの URL に含まれる 20 文字の ref |"
+              echo
+              echo "手順の詳細は README.md の「DB マイグレーションの運用」を参照してください。"
+              echo "登録後、この Actions タブから **Run workflow** で手動実行すれば適用されます。"
+            } >> "${GITHUB_STEP_SUMMARY}"
+
+            echo "::error title=必要なシークレットが設定されていません::${missing# } が未設定です。README の「DB マイグレーションの運用」に従って Settings → Secrets and variables → Actions で登録してください。"
+            exit 1
+          fi
+
+          echo "必要なシークレットはすべて設定されています。"
+
+      - name: Supabase CLI をセットアップ
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: 本番プロジェクトに link
+        run: supabase link --project-ref "${SUPABASE_PROJECT_REF}"
+
+      - name: 既存スキーマ(Phase 1〜4)を適用済みとして登録
+        if: ${{ inputs.skip_baseline != true }}
+        run: |
+          set -o pipefail
+
+          list_json="$(supabase migration list --linked --output-format json 2>/dev/null || true)"
+          remote_count="$(printf '%s' "${list_json}" \
+            | jq -r 'if type == "object" and has("migrations")
+                     then ([.migrations[] | select((.remote // "") != "")] | length)
+                     else "unknown" end' 2>/dev/null || echo unknown)"
+
+          if [ "${remote_count}" = "unknown" ] || [ -z "${remote_count}" ]; then
+            echo "::warning title=マイグレーション履歴を判定できませんでした::baseline 登録をスキップします。マイグレーションはすべて冪等なので、そのまま db push を続行します。"
+            exit 0
+          fi
+
+          if [ "${remote_count}" != "0" ]; then
+            echo "マイグレーション履歴に ${remote_count} 件の適用済み記録があります。baseline 登録は不要です。"
+            exit 0
+          fi
+
+          echo "マイグレーション履歴が空です。手作業で適用済みの Phase 1〜4 を「適用済み」として登録します。"
+          # shellcheck disable=SC2086
+          supabase migration repair --linked --status applied ${BASELINE_VERSIONS}
+          echo "登録しました: ${BASELINE_VERSIONS}"
+
+      - name: 未適用のマイグレーションを本番に適用
+        run: supabase db push --linked --yes
+
+      - name: 適用結果をサマリーに出力
+        if: ${{ always() && env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
+        run: |
+          {
+            echo "## Supabase マイグレーション"
+            echo
+            echo "プロジェクト ref: \`${SUPABASE_PROJECT_REF}\`"
+            echo
+            supabase migration list --linked --output-format text 2>/dev/null \
+              || echo "(マイグレーション履歴を取得できませんでした)"
+          } >> "${GITHUB_STEP_SUMMARY}"

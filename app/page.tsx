@@ -31,6 +31,20 @@ import type {
 
 const PHASE4_SETUP_HINT = "(supabase/phase4.sql を実行済みか確認してください)";
 
+/** 削除後に「元に戻す」を出しておく時間 */
+const UNDO_TIMEOUT_MS = 8000;
+
+/** 確認ダイアログに種目名を並べる上限(多すぎると読めないので省略する) */
+const CONFIRM_NAME_LIMIT = 8;
+
+/**
+ * 一括削除の直前の状態。
+ * 「元に戻す」で同じ id のまま復元できるよう、セットまで丸ごと持っておく。
+ */
+type DeletedSnapshot = {
+  logs: WorkoutLogWithExercise[];
+};
+
 /** DB のセットを入力フォーム用の文字列に変換する */
 function toSetInputs(sets: WorkoutSet[]): SetInput[] {
   return sortSets(sets).map((s) => ({
@@ -47,6 +61,54 @@ function toSetRows(sets: SetInput[]) {
     weight_kg: Number(s.weight_kg) || 0,
     reps: Number(s.reps) || 0,
   }));
+}
+
+function exerciseName(log: WorkoutLogWithExercise): string {
+  return log.exercises?.name ?? "(削除された種目)";
+}
+
+/** 部位バッジ + 種目名(通常表示と選択モードで共通に使う) */
+function ExerciseHeading({ log }: { log: WorkoutLogWithExercise }) {
+  return (
+    <>
+      <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">
+        {normalizeMuscleGroup(
+          log.exercises?.muscle_group,
+          log.exercises?.name ?? undefined
+        )}
+      </span>
+      <p className="min-w-0 truncate font-semibold">{exerciseName(log)}</p>
+    </>
+  );
+}
+
+/** セットの一覧(「1set 80kg × 10回」)。通常表示と選択モードで共通に使う */
+function SetLines({ sets }: { sets: WorkoutSet[] }) {
+  if (sets.length === 0) {
+    return <p className="mt-1 text-sm text-gray-400">セットが未入力です</p>;
+  }
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {sets.map((s, i) => (
+        <li key={s.id} className="flex items-baseline gap-2 text-sm">
+          <span
+            className="w-9 shrink-0 text-xs tabular-nums"
+            style={{ color: VIZ.muted }}
+          >
+            {i + 1}set
+          </span>
+          <span className="tabular-nums text-gray-700">
+            {Number(s.weight_kg) > 0 ? (
+              <>{formatWeight(Number(s.weight_kg))}kg × </>
+            ) : (
+              <span className="text-gray-400">重量なし × </span>
+            )}
+            {Number(s.reps)}回
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function RecordPage() {
@@ -78,6 +140,12 @@ function RecordPage() {
   const [routineId, setRoutineId] = useState("");
   const [applying, setApplying] = useState(false);
 
+  // 選択モード(種目の一括削除)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  const [undoTarget, setUndoTarget] = useState<DeletedSnapshot | null>(null);
+
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
     const supabase = createClient();
@@ -95,6 +163,10 @@ function RecordPage() {
     const dayLogs = sortLogs((data as WorkoutLogWithExercise[]) ?? []);
     setLogs(dayLogs);
     setError(null);
+
+    // 消えた記録を選択したままにしない
+    const aliveIds = new Set(dayLogs.map((l) => l.id));
+    setSelectedIds((ids) => ids.filter((id) => aliveIds.has(id)));
 
     const exerciseIds = [...new Set(dayLogs.map((l) => l.exercise_id))];
     if (exerciseIds.length === 0) {
@@ -147,9 +219,20 @@ function RecordPage() {
   useEffect(() => {
     (async () => {
       setEditId(null);
+      // 日付をまたいで選択状態や「元に戻す」を持ち越さない
+      setSelectMode(false);
+      setSelectedIds([]);
+      setUndoTarget(null);
       await loadLogs(date);
     })();
   }, [date, loadLogs]);
+
+  // 「元に戻す」は数秒だけ出す(押さなければそのまま消える)
+  useEffect(() => {
+    if (!undoTarget) return;
+    const timer = setTimeout(() => setUndoTarget(null), UNDO_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [undoTarget]);
 
   const addLog = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -243,18 +326,154 @@ function RecordPage() {
     setSaving(false);
   };
 
-  const deleteLog = async (id: string) => {
-    if (!confirm("この記録を削除しますか?")) return;
+  /**
+   * 種目(workout_logs)をまとめて削除する。
+   *
+   * DB 側の外部キーは workout_sets.workout_log_id → workout_logs.id が
+   * on delete cascade なので親を消せばセットも消えるが、
+   * 環境によって古いスキーマのまま(cascade 未設定)の可能性があるため、
+   * 孤児レコードを残さないよう
+   * 「先に workout_sets → 次に workout_logs」の順でアプリ側からも明示的に消す。
+   * cascade 済みの環境でも、先に子を消してあるだけなので二重に消えて困ることはない。
+   */
+  const deleteLogs = async (targets: WorkoutLogWithExercise[]) => {
+    if (targets.length === 0) return;
+    const ids = targets.map((l) => l.id);
+
+    setDeleting(true);
+    setError(null);
     const supabase = createClient();
-    const { error: delError } = await supabase
+
+    const { error: setsError } = await supabase
+      .from("workout_sets")
+      .delete()
+      .in("workout_log_id", ids);
+    if (setsError) {
+      setError(`セットの削除に失敗しました: ${setsError.message}`);
+      setDeleting(false);
+      return;
+    }
+
+    const { error: logsError } = await supabase
       .from("workout_logs")
       .delete()
-      .eq("id", id);
-    if (delError) {
-      setError(`削除に失敗しました: ${delError.message}`);
-    } else {
+      .in("id", ids);
+    if (logsError) {
+      setError(`削除に失敗しました: ${logsError.message}`);
       await loadLogs(date);
+      setDeleting(false);
+      return;
     }
+
+    setSelectedIds([]);
+    setSelectMode(false);
+    setUndoTarget({ logs: targets });
+    await loadLogs(date);
+    setDeleting(false);
+  };
+
+  /** 件数と種目名を見せてから削除する(取り返しがつかないので必ず通す) */
+  const confirmAndDelete = (targets: WorkoutLogWithExercise[]) => {
+    if (targets.length === 0 || deleting) return;
+    const shown = targets
+      .slice(0, CONFIRM_NAME_LIMIT)
+      .map((l) => `・${exerciseName(l)}`)
+      .join("\n");
+    const rest =
+      targets.length > CONFIRM_NAME_LIMIT
+        ? `\n・ほか${targets.length - CONFIRM_NAME_LIMIT}件`
+        : "";
+    const ok = confirm(
+      `${targets.length}件の種目を削除します。よろしいですか?\n\n` +
+        `${shown}${rest}\n\n` +
+        "各種目のセットの記録もいっしょに削除されます。"
+    );
+    if (!ok) return;
+    void deleteLogs(targets);
+  };
+
+  const deleteLog = (log: WorkoutLogWithExercise) => confirmAndDelete([log]);
+
+  const deleteSelected = () =>
+    confirmAndDelete(logs.filter((l) => selectedIds.includes(l.id)));
+
+  const deleteAllOfDay = () => confirmAndDelete(logs);
+
+  /**
+   * 直前の一括削除を元に戻す。
+   *
+   * workout_sets の RLS / 外部キーは親の workout_logs が居ることを前提にしているので、
+   * 削除とは逆に「先に workout_logs → 次に workout_sets」の順で戻す。
+   * id をそのまま指定して入れ直すので、並び順もセットの内容も削除前と同じになる。
+   */
+  const undoDelete = async () => {
+    const snapshot = undoTarget;
+    if (!snapshot || deleting) return;
+
+    setDeleting(true);
+    setError(null);
+    const supabase = createClient();
+
+    const { error: logsError } = await supabase.from("workout_logs").insert(
+      snapshot.logs.map((l) => ({
+        id: l.id,
+        user_id: l.user_id,
+        workout_date: l.workout_date,
+        exercise_id: l.exercise_id,
+        memo: l.memo,
+        sort_order: l.sort_order,
+        created_at: l.created_at,
+      }))
+    );
+    if (logsError) {
+      setError(`元に戻せませんでした: ${logsError.message}`);
+      await loadLogs(date);
+      setDeleting(false);
+      return;
+    }
+
+    const setRows = snapshot.logs.flatMap((l) =>
+      (l.workout_sets ?? []).map((s) => ({
+        id: s.id,
+        workout_log_id: l.id,
+        set_number: s.set_number,
+        weight_kg: s.weight_kg,
+        reps: s.reps,
+        created_at: s.created_at,
+      }))
+    );
+    if (setRows.length > 0) {
+      const { error: setsError } = await supabase
+        .from("workout_sets")
+        .insert(setRows);
+      if (setsError) {
+        setError(`セットを元に戻せませんでした: ${setsError.message}`);
+      }
+    }
+
+    setUndoTarget(null);
+    await loadLogs(date);
+    setDeleting(false);
+  };
+
+  const toggleSelectMode = () => {
+    setSelectMode((on) => {
+      if (on) setSelectedIds([]);
+      return !on;
+    });
+    setEditId(null);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((ids) =>
+      ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id]
+    );
+  };
+
+  const allSelected = logs.length > 0 && selectedIds.length === logs.length;
+
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? [] : logs.map((l) => l.id));
   };
 
   /** ドラッグ&ドロップの結果を sort_order として保存する */
@@ -510,19 +729,60 @@ function RecordPage() {
               展開
             </button>
           </div>
+
+          {/* 間違ったルーティンを展開した直後にすぐ戻せるようにする */}
+          {logs.length > 0 && (
+            <button
+              type="button"
+              onClick={deleteAllOfDay}
+              disabled={deleting}
+              className="mt-2 w-full rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm font-semibold text-red-600 active:bg-red-100 disabled:opacity-40"
+            >
+              間違えて展開した? この日の種目をすべて削除({logs.length}件)
+            </button>
+          )}
         </div>
       )}
 
       {/* 記録一覧 */}
       <section className="mb-4">
-        <div className="mb-2 flex items-baseline justify-between">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-gray-600">
             この日の記録({logs.length}件)
           </h2>
-          {logs.length > 1 && (
-            <p className="text-xs text-gray-500">⠿ を長押しで並べ替え</p>
+          {logs.length > 0 && (
+            <button
+              type="button"
+              onClick={toggleSelectMode}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold active:opacity-80 ${
+                selectMode
+                  ? "bg-gray-200 text-gray-700"
+                  : "bg-red-50 text-red-600"
+              }`}
+            >
+              {selectMode ? "選択をやめる" : "選択して削除"}
+            </button>
           )}
         </div>
+
+        {!selectMode && logs.length > 1 && (
+          <p className="mb-2 text-xs text-gray-500">⠿ を長押しで並べ替え</p>
+        )}
+
+        {selectMode && (
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-white p-2 shadow-sm">
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-semibold text-gray-700 active:bg-gray-200"
+            >
+              {allSelected ? "すべて解除" : "すべて選択"}
+            </button>
+            <span className="text-xs font-semibold text-gray-500">
+              {selectedIds.length}件を選択中
+            </span>
+          </div>
+        )}
 
         {loading ? (
           <p className="py-6 text-center text-sm text-gray-400">読み込み中...</p>
@@ -530,6 +790,35 @@ function RecordPage() {
           <p className="rounded-xl bg-white py-6 text-center text-sm text-gray-400 shadow-sm">
             まだ記録がありません
           </p>
+        ) : selectMode ? (
+          // 選択モード: カード全体をタップ領域にして、指でも選びやすくする
+          <ul className="space-y-2">
+            {logs.map((log) => {
+              const checked = selectedIds.includes(log.id);
+              return (
+                <li key={log.id}>
+                  <label
+                    className={`flex items-start gap-3 rounded-xl p-3 shadow-sm ${
+                      checked ? "bg-red-50 ring-2 ring-red-400" : "bg-white"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSelected(log.id)}
+                      className="mt-0.5 h-6 w-6 shrink-0 accent-red-600"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1">
+                        <ExerciseHeading log={log} />
+                      </div>
+                      <SetLines sets={sortSets(log.workout_sets ?? [])} />
+                    </div>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
         ) : (
           <SortableList
             items={logs}
@@ -549,9 +838,7 @@ function RecordPage() {
                 <div className="rounded-xl bg-white p-3 shadow-sm">
                   {isEditing ? (
                     <div>
-                      <p className="mb-2 font-semibold">
-                        {log.exercises?.name ?? "(削除された種目)"}
-                      </p>
+                      <p className="mb-2 font-semibold">{exerciseName(log)}</p>
                       <SetInputList
                         sets={editSets}
                         onChange={setEditSets}
@@ -578,15 +865,7 @@ function RecordPage() {
                       <div className="flex items-start justify-between gap-1">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           {dragHandle}
-                          <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">
-                            {normalizeMuscleGroup(
-                              log.exercises?.muscle_group,
-                              log.exercises?.name ?? undefined
-                            )}
-                          </span>
-                          <p className="min-w-0 truncate font-semibold">
-                            {log.exercises?.name ?? "(削除された種目)"}
-                          </p>
+                          <ExerciseHeading log={log} />
                         </div>
                         <div className="flex shrink-0 gap-1">
                           <button
@@ -596,47 +875,17 @@ function RecordPage() {
                             編集
                           </button>
                           <button
-                            onClick={() => deleteLog(log.id)}
-                            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100"
+                            onClick={() => deleteLog(log)}
+                            disabled={deleting}
+                            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100 disabled:opacity-40"
                           >
                             削除
                           </button>
                         </div>
                       </div>
 
-                      {sets.length === 0 ? (
-                        <p className="mt-1 pl-9 text-sm text-gray-400">
-                          セットが未入力です
-                        </p>
-                      ) : (
-                        <ul className="mt-1 space-y-0.5 pl-9">
-                          {sets.map((s, i) => (
-                            <li
-                              key={s.id}
-                              className="flex items-baseline gap-2 text-sm"
-                            >
-                              <span
-                                className="w-9 shrink-0 text-xs tabular-nums"
-                                style={{ color: VIZ.muted }}
-                              >
-                                {i + 1}set
-                              </span>
-                              <span className="tabular-nums text-gray-700">
-                                {Number(s.weight_kg) > 0 ? (
-                                  <>
-                                    {formatWeight(Number(s.weight_kg))}kg ×{" "}
-                                  </>
-                                ) : (
-                                  <span className="text-gray-400">重量なし × </span>
-                                )}
-                                {Number(s.reps)}回
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-
                       <div className="pl-9">
+                        <SetLines sets={sets} />
                         <TrendBadges
                           comparison={comparison}
                           maxWeight={maxWeight(sets)}
@@ -693,6 +942,44 @@ function RecordPage() {
           </form>
         )}
       </section>
+
+      {/* 固定した一括削除バー / スナックバーに隠れないよう、下に余白を足しておく */}
+      {(selectMode || undoTarget) && <div className="h-20" aria-hidden />}
+
+      {/* 一括削除バー(下部ナビの上に固定して、親指で押しやすい位置に置く) */}
+      {selectMode && (
+        <div className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+3.5rem)] z-20 mx-auto w-full max-w-md px-4">
+          <button
+            type="button"
+            onClick={deleteSelected}
+            disabled={selectedIds.length === 0 || deleting}
+            className="w-full rounded-xl bg-red-600 py-3 font-semibold text-white shadow-lg active:opacity-80 disabled:opacity-40"
+          >
+            {selectedIds.length === 0
+              ? "削除する種目を選んでください"
+              : `${selectedIds.length}件を削除`}
+          </button>
+        </div>
+      )}
+
+      {/* 削除の取り消し(数秒だけ出す) */}
+      {undoTarget && (
+        <div className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+3.5rem)] z-30 mx-auto w-full max-w-md px-4">
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-gray-900 px-4 py-3 text-white shadow-lg">
+            <p className="min-w-0 flex-1 text-sm">
+              {undoTarget.logs.length}件の種目を削除しました
+            </p>
+            <button
+              type="button"
+              onClick={undoDelete}
+              disabled={deleting}
+              className="shrink-0 rounded-lg bg-white/20 px-4 py-2 text-sm font-semibold active:bg-white/30 disabled:opacity-40"
+            >
+              元に戻す
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

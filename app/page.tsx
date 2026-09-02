@@ -7,17 +7,25 @@ import { createClient } from "@/lib/supabase/client";
 import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
-import { formatDateLabel, todayString } from "@/lib/date";
+import {
+  formatDateLabel,
+  formatShortDateLabel,
+  todayString,
+} from "@/lib/date";
 import { VIZ } from "@/lib/viz";
 import {
+  buildPreviousMemoMap,
   buildPreviousRecordMap,
   compareWithPrevious,
   formatWeight,
+  hasMemo,
   hasWeight,
   maxWeight,
+  memoText,
   sortLogs,
   sortSets,
   totalVolume,
+  type PreviousMemo,
   type PreviousRecord,
 } from "@/lib/workoutStats";
 import { normalizeMuscleGroup } from "@/lib/muscleGroups";
@@ -36,6 +44,12 @@ const UNDO_TIMEOUT_MS = 8000;
 
 /** 確認ダイアログに種目名を並べる上限(多すぎると読めないので省略する) */
 const CONFIRM_NAME_LIMIT = 8;
+
+/** メモの最大文字数(短い書き置きを想定) */
+const MEMO_MAX_LENGTH = 500;
+
+const MEMO_PLACEHOLDER =
+  "例: フォームを意識 / 肘が痛かったので軽め / 次回は+2.5kg";
 
 /**
  * 一括削除の直前の状態。
@@ -82,6 +96,24 @@ function ExerciseHeading({ log }: { log: WorkoutLogWithExercise }) {
   );
 }
 
+/**
+ * メモの表示(📝 + 本文)。
+ * 一覧が窮屈にならないよう 2 行までに抑え、続きは編集画面で読む。
+ * ボタンの中にも置くので、要素は span だけで組む。
+ */
+function MemoLine({ memo }: { memo: string }) {
+  return (
+    <span className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-left text-xs leading-relaxed text-amber-900">
+      <span aria-hidden className="shrink-0">
+        📝
+      </span>
+      <span className="line-clamp-2 min-w-0 flex-1 break-words whitespace-pre-wrap">
+        {memo}
+      </span>
+    </span>
+  );
+}
+
 /** セットの一覧(「1set 80kg × 10回」)。通常表示と選択モードで共通に使う */
 function SetLines({ sets }: { sets: WorkoutSet[] }) {
   if (sets.length === 0) {
@@ -120,6 +152,10 @@ function RecordPage() {
   const [previous, setPrevious] = useState<Map<string, PreviousRecord>>(
     new Map()
   );
+  /** 種目ごとの「前回のメモ」(その日より前で、いちばん新しいメモ) */
+  const [previousMemos, setPreviousMemos] = useState<Map<string, PreviousMemo>>(
+    new Map()
+  );
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [routines, setRoutines] = useState<RoutineWithItems[]>([]);
   const [loading, setLoading] = useState(true);
@@ -135,6 +171,11 @@ function RecordPage() {
   // 編集(記録 1 件分のセットをまとめて編集する)
   const [editId, setEditId] = useState<string | null>(null);
   const [editSets, setEditSets] = useState<SetInput[]>([]);
+
+  // メモ編集(日付 × 種目 = 記録 1 件につき 1 つ)
+  const [memoEditId, setMemoEditId] = useState<string | null>(null);
+  const [memoDraft, setMemoDraft] = useState("");
+  const [memoSaving, setMemoSaving] = useState(false);
 
   // ルーティン展開
   const [routineId, setRoutineId] = useState("");
@@ -171,29 +212,34 @@ function RecordPage() {
     const exerciseIds = [...new Set(dayLogs.map((l) => l.exercise_id))];
     if (exerciseIds.length === 0) {
       setPrevious(new Map());
+      setPreviousMemos(new Map());
       return;
     }
 
     // その日より前の記録を新しい順に取り、種目ごとに最初の 1 件を「前回」とする
+    // (メモも同じ問い合わせで拾って「前回のメモ」として出す)
     const { data: prevData } = await supabase
       .from("workout_logs")
-      .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+      .select(
+        "exercise_id, workout_date, memo, workout_sets(weight_kg, reps, set_number)"
+      )
       .in("exercise_id", exerciseIds)
       .lt("workout_date", targetDate)
       .order("workout_date", { ascending: false })
       .limit(200);
 
-    setPrevious(
-      buildPreviousRecordMap(
-        (prevData as
-          | {
-              exercise_id: string;
-              workout_date: string;
-              workout_sets: WorkoutSet[] | null;
-            }[]
-          | null) ?? []
-      )
-    );
+    const prevRows =
+      (prevData as
+        | {
+            exercise_id: string;
+            workout_date: string;
+            memo: string | null;
+            workout_sets: WorkoutSet[] | null;
+          }[]
+        | null) ?? [];
+
+    setPrevious(buildPreviousRecordMap(prevRows));
+    setPreviousMemos(buildPreviousMemoMap(prevRows));
   }, []);
 
   useEffect(() => {
@@ -219,6 +265,8 @@ function RecordPage() {
   useEffect(() => {
     (async () => {
       setEditId(null);
+      setMemoEditId(null);
+      setMemoDraft("");
       // 日付をまたいで選択状態や「元に戻す」を持ち越さない
       setSelectMode(false);
       setSelectedIds([]);
@@ -289,6 +337,7 @@ function RecordPage() {
   };
 
   const startEdit = (log: WorkoutLogWithExercise) => {
+    setMemoEditId(null);
     setEditId(log.id);
     const inputs = toSetInputs(log.workout_sets ?? []);
     setEditSets(inputs.length > 0 ? inputs : [nextSet([])]);
@@ -324,6 +373,49 @@ function RecordPage() {
     }
     await loadLogs(date);
     setSaving(false);
+  };
+
+  /** メモの編集を開く(セットの編集とは同時に開かない) */
+  const startMemoEdit = (log: WorkoutLogWithExercise) => {
+    setEditId(null);
+    setMemoEditId(log.id);
+    setMemoDraft(memoText(log.memo));
+  };
+
+  const cancelMemoEdit = () => {
+    setMemoEditId(null);
+    setMemoDraft("");
+  };
+
+  /**
+   * メモを保存する(空にして保存すればメモを消せる)。
+   * メモは「日付 × 種目」= workout_logs 1 行に紐づくので、その行を更新するだけ。
+   */
+  const saveMemo = async (log: WorkoutLogWithExercise, memo: string) => {
+    const trimmed = memo.trim().slice(0, MEMO_MAX_LENGTH);
+    setMemoSaving(true);
+    setError(null);
+    const supabase = createClient();
+    const { error: memoError } = await supabase
+      .from("workout_logs")
+      .update({ memo: trimmed === "" ? null : trimmed })
+      .eq("id", log.id);
+
+    if (memoError) {
+      setError(`メモの保存に失敗しました: ${memoError.message}`);
+    } else {
+      setMemoEditId(null);
+      setMemoDraft("");
+    }
+    await loadLogs(date);
+    setMemoSaving(false);
+  };
+
+  const deleteMemo = (log: WorkoutLogWithExercise) => {
+    if (memoSaving) return;
+    const ok = confirm(`${exerciseName(log)}のメモを削除します。よろしいですか?`);
+    if (!ok) return;
+    void saveMemo(log, "");
   };
 
   /**
@@ -456,12 +548,20 @@ function RecordPage() {
     setDeleting(false);
   };
 
+  /** 選択モードに入る / 抜ける。抜けるときはチェックをすべて解除する */
   const toggleSelectMode = () => {
     setSelectMode((on) => {
       if (on) setSelectedIds([]);
       return !on;
     });
     setEditId(null);
+    setMemoEditId(null);
+  };
+
+  /** 選択をすべて破棄して通常モードに戻る(キャンセル) */
+  const exitSelectMode = () => {
+    setSelectedIds([]);
+    setSelectMode(false);
   };
 
   const toggleSelected = (id: string) => {
@@ -813,6 +913,7 @@ function RecordPage() {
                         <ExerciseHeading log={log} />
                       </div>
                       <SetLines sets={sortSets(log.workout_sets ?? [])} />
+                      {hasMemo(log.memo) && <MemoLine memo={memoText(log.memo)} />}
                     </div>
                   </label>
                 </li>
@@ -833,6 +934,9 @@ function RecordPage() {
                 previous.get(log.exercise_id) ?? null
               );
               const isEditing = editId === log.id;
+              const isMemoEditing = memoEditId === log.id;
+              const memo = memoText(log.memo);
+              const prevMemo = previousMemos.get(log.exercise_id) ?? null;
 
               return (
                 <div className="rounded-xl bg-white p-3 shadow-sm">
@@ -892,6 +996,102 @@ function RecordPage() {
                           totalVolume={totalVolume(sets)}
                           weightless={sets.length > 0 && !hasWeight(sets)}
                         />
+
+                        {/* メモ(その日のその種目の書き置き) */}
+                        {isMemoEditing ? (
+                          <div className="mt-2">
+                            <label
+                              htmlFor={`memo-${log.id}`}
+                              className="mb-1 block text-xs font-semibold text-gray-500"
+                            >
+                              メモ
+                            </label>
+                            <textarea
+                              id={`memo-${log.id}`}
+                              value={memoDraft}
+                              onChange={(e) => setMemoDraft(e.target.value)}
+                              rows={3}
+                              maxLength={MEMO_MAX_LENGTH}
+                              placeholder={MEMO_PLACEHOLDER}
+                              className="w-full rounded-lg border border-gray-300 px-3 py-2 leading-relaxed"
+                            />
+                            <p className="mt-0.5 text-right text-[11px] tabular-nums text-gray-400">
+                              {memoDraft.length}/{MEMO_MAX_LENGTH}
+                            </p>
+
+                            {/* 前回のメモを見ながら書けるようにする */}
+                            {prevMemo && (
+                              <div className="mt-1 rounded-lg bg-gray-50 px-2 py-1.5">
+                                <p className="text-[11px] font-semibold text-gray-500">
+                                  前回のメモ(
+                                  {formatShortDateLabel(prevMemo.date)})
+                                </p>
+                                <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-gray-600">
+                                  {prevMemo.memo}
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => saveMemo(log, memoDraft)}
+                                disabled={memoSaving}
+                                className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                              >
+                                保存
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelMemoEdit}
+                                disabled={memoSaving}
+                                className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80 disabled:opacity-40"
+                              >
+                                キャンセル
+                              </button>
+                            </div>
+
+                            {memo !== "" && (
+                              <button
+                                type="button"
+                                onClick={() => deleteMemo(log)}
+                                disabled={memoSaving}
+                                className="mt-2 w-full rounded-lg border border-red-200 py-2 text-xs font-semibold text-red-600 active:bg-red-50 disabled:opacity-40"
+                              >
+                                メモを削除
+                              </button>
+                            )}
+                          </div>
+                        ) : memo !== "" ? (
+                          <button
+                            type="button"
+                            onClick={() => startMemoEdit(log)}
+                            aria-label={`${exerciseName(log)}のメモを編集`}
+                            className="block w-full active:opacity-70"
+                          >
+                            <MemoLine memo={memo} />
+                          </button>
+                        ) : (
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startMemoEdit(log)}
+                              className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 active:bg-gray-200"
+                            >
+                              ＋ メモ
+                            </button>
+                            {prevMemo && (
+                              <button
+                                type="button"
+                                onClick={() => startMemoEdit(log)}
+                                className="min-w-0 flex-1 truncate text-left text-xs text-gray-400 active:text-gray-600"
+                              >
+                                前回({formatShortDateLabel(prevMemo.date)}):{" "}
+                                {prevMemo.memo}
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -944,21 +1144,35 @@ function RecordPage() {
       </section>
 
       {/* 固定した一括削除バー / スナックバーに隠れないよう、下に余白を足しておく */}
-      {(selectMode || undoTarget) && <div className="h-20" aria-hidden />}
+      {(selectMode || undoTarget) && <div className="h-24" aria-hidden />}
 
-      {/* 一括削除バー(下部ナビの上に固定して、親指で押しやすい位置に置く) */}
+      {/*
+        一括削除バー(下部ナビの上に固定して、親指で押しやすい位置に置く)。
+        押し間違いを防ぐため、キャンセル(左・白地)と削除(右・赤地)で
+        色も位置もはっきり分け、間に余白を入れている。
+      */}
       {selectMode && (
         <div className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+3.5rem)] z-20 mx-auto w-full max-w-md px-4">
-          <button
-            type="button"
-            onClick={deleteSelected}
-            disabled={selectedIds.length === 0 || deleting}
-            className="w-full rounded-xl bg-red-600 py-3 font-semibold text-white shadow-lg active:opacity-80 disabled:opacity-40"
-          >
-            {selectedIds.length === 0
-              ? "削除する種目を選んでください"
-              : `${selectedIds.length}件を削除`}
-          </button>
+          <div className="flex gap-3 rounded-2xl bg-white p-2 shadow-lg">
+            <button
+              type="button"
+              onClick={exitSelectMode}
+              disabled={deleting}
+              className="w-[38%] shrink-0 rounded-xl border border-gray-300 bg-white py-3 text-sm font-semibold text-gray-700 active:bg-gray-100 disabled:opacity-40"
+            >
+              キャンセル
+            </button>
+            <button
+              type="button"
+              onClick={deleteSelected}
+              disabled={selectedIds.length === 0 || deleting}
+              className="min-w-0 flex-1 rounded-xl bg-red-600 py-3 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+            >
+              {selectedIds.length === 0
+                ? "削除する種目を選んでください"
+                : `${selectedIds.length}件を削除`}
+            </button>
+          </div>
         </div>
       )}
 

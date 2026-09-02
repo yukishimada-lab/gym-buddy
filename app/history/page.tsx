@@ -4,7 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateLabel } from "@/lib/date";
-import { formatSets, sortLogs, sortSets, summaryLine } from "@/lib/workoutStats";
+import {
+  formatSets,
+  hasMemo,
+  memoText,
+  sortLogs,
+  sortSets,
+  summaryLine,
+} from "@/lib/workoutStats";
 import { normalizeMuscleGroup } from "@/lib/muscleGroups";
 import type { WorkoutLogWithExercise } from "@/lib/types";
 
@@ -97,6 +104,17 @@ export default function HistoryPage() {
                       <p className="truncate text-xs tabular-nums text-gray-400">
                         {summaryLine(sortSets(log.workout_sets ?? []))}
                       </p>
+                      {/* メモがあることが一覧でも分かるようにする(1 行だけ) */}
+                      {hasMemo(log.memo) && (
+                        <p className="flex items-center gap-1 text-xs text-amber-700">
+                          <span aria-hidden className="shrink-0">
+                            📝
+                          </span>
+                          <span className="min-w-0 truncate">
+                            {memoText(log.memo)}
+                          </span>
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>

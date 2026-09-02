@@ -5,8 +5,10 @@ import { formatDateLabel } from "@/lib/date";
 import {
   formatNumber,
   formatWeight,
+  hasMemo,
   hasWeight,
   maxWeight,
+  memoText,
   sortSets,
   totalReps,
   totalVolume,
@@ -364,6 +366,28 @@ export default function DaySummaryCard({
                       {weighted &&
                         ` ・ 総ボリューム ${formatNumber(totalVolume(sets))}kg`}
                     </div>
+
+                    {/* その種目のメモ(あれば) */}
+                    {hasMemo(log.memo) && (
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          marginTop: 6,
+                          padding: "6px 10px",
+                          backgroundColor: "#f6f6f4",
+                          borderRadius: 8,
+                          fontSize: 13,
+                          lineHeight: 1.6,
+                          color: VIZ.textSecondary,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        <span style={{ flexShrink: 0 }}>📝</span>
+                        <span>{memoText(log.memo)}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}

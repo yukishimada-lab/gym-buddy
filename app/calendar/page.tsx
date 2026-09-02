@@ -14,7 +14,14 @@ import {
   todayString,
   type YearMonth,
 } from "@/lib/date";
-import { formatNumber, sortLogs, sortSets, summaryLine } from "@/lib/workoutStats";
+import {
+  formatNumber,
+  hasMemo,
+  memoText,
+  sortLogs,
+  sortSets,
+  summaryLine,
+} from "@/lib/workoutStats";
 import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
 import ShareDaySummary from "@/components/ShareDaySummary";
 import type {
@@ -374,6 +381,17 @@ function CalendarPage() {
                             <p className="text-xs tabular-nums text-gray-500">
                               {summaryLine(sortSets(log.workout_sets ?? []))}
                             </p>
+                            {/* その日その種目のメモ(あれば) */}
+                            {hasMemo(log.memo) && (
+                              <p className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-amber-900">
+                                <span aria-hidden className="shrink-0">
+                                  📝
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  {memoText(log.memo)}
+                                </span>
+                              </p>
+                            )}
                           </li>
                         ))}
                       </ul>

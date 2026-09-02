@@ -149,6 +149,46 @@ export function buildPreviousRecordMap(
   return map;
 }
 
+/** 直近の同じ種目のメモ(記録するときの参考に出す) */
+export type PreviousMemo = {
+  date: string;
+  memo: string;
+};
+
+/** メモの表示用テキスト。空白だけのメモは「無い」ものとして扱う */
+export function memoText(memo: string | null | undefined): string {
+  return (memo ?? "").trim();
+}
+
+/** メモが入っているか */
+export function hasMemo(memo: string | null | undefined): boolean {
+  return memoText(memo).length > 0;
+}
+
+/**
+ * 「種目 ID → その種目の直近のメモ(この日より前)」を作る。
+ * 日付降順で渡された記録から、種目ごとに最初に見つかった空でないメモを採用する。
+ *
+ * セットの比較(buildPreviousRecordMap)と違って、
+ * セットが 1 つも無い日の記録でもメモだけは拾う。
+ */
+export function buildPreviousMemoMap(
+  logsDesc: {
+    exercise_id: string;
+    workout_date: string;
+    memo: string | null;
+  }[]
+): Map<string, PreviousMemo> {
+  const map = new Map<string, PreviousMemo>();
+  for (const log of logsDesc) {
+    if (map.has(log.exercise_id)) continue;
+    const memo = memoText(log.memo);
+    if (!memo) continue;
+    map.set(log.exercise_id, { date: log.workout_date, memo });
+  }
+  return map;
+}
+
 /**
  * 記録 1 件を「80kg×10回 / 80kg×8回 / 70kg×8回」のような文字列にする。
  * 重量がまったく入っていない記録は「0kg×10回」だと誤解を招くので回数だけを出す。

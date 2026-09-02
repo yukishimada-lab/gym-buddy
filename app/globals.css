@@ -50,3 +50,40 @@ summary {
   user-select: none;
   -webkit-touch-callout: none;
 }
+
+/* ---- 入力欄がカードからはみ出さないようにする ---- */
+
+/*
+ * iOS Safari の日付入力対策。
+ *
+ * iOS の input[type="date"] は「中身の幅」で広がろうとするため、
+ * width:100%(w-full)を指定していても親のカードより横に大きくなり、
+ * グレーの枠線がカードの右端からはみ出して見えてしまう。
+ * 見た目のリセット(appearance:none)と min-width:0 で親の幅に収める。
+ */
+input[type="date"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="time"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* iOS は日付の値を中央寄せ・余白付きで描くので、左寄せにして高さを担保する */
+input[type="date"]::-webkit-date-and-time-value,
+input[type="datetime-local"]::-webkit-date-and-time-value,
+input[type="month"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  text-align: left;
+  min-height: 1.5em;
+  margin: 0;
+}
+
+/* 入力欄全般の保険(狭い画面で親の幅を超えさせない) */
+input,
+select,
+textarea {
+  max-width: 100%;
+}

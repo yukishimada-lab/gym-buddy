@@ -54,7 +54,12 @@ export default function ExercisesPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    // セッションが切れている場合(AppShell が /login に飛ばす)。
+    // ボタンが押せないまま固まらないよう保存中フラグは戻しておく。
+    if (!user) {
+      setSaving(false);
+      return;
+    }
     const { error } = await supabase.from("exercises").insert({
       user_id: user.id,
       name: name.trim(),
@@ -76,7 +81,12 @@ export default function ExercisesPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    // セッションが切れている場合(AppShell が /login に飛ばす)。
+    // ボタンが押せないまま固まらないよう保存中フラグは戻しておく。
+    if (!user) {
+      setSaving(false);
+      return;
+    }
     const rows = DEFAULT_EXERCISES.map((ex) => ({ ...ex, user_id: user.id }));
     const { error } = await supabase.from("exercises").insert(rows);
     if (error) {

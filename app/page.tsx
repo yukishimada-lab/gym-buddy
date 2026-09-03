@@ -187,6 +187,15 @@ function RecordPage() {
   const [deleting, setDeleting] = useState(false);
   const [undoTarget, setUndoTarget] = useState<DeletedSnapshot | null>(null);
 
+  /**
+   * 「この日の種目をすべて削除」の案内を出すかどうか。
+   *
+   * 本来はルーティンを間違えて展開した直後に使うものなので、常時出さずに
+   * 展開した直後だけ出す。× で閉じる・日付を変える・画面に入り直すと消える。
+   * (閉じたあとは「選択して削除」→「すべて選択」で同じことができる)
+   */
+  const [justExpanded, setJustExpanded] = useState(false);
+
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
     const supabase = createClient();
@@ -271,6 +280,7 @@ function RecordPage() {
       setSelectMode(false);
       setSelectedIds([]);
       setUndoTarget(null);
+      setJustExpanded(false);
       await loadLogs(date);
     })();
   }, [date, loadLogs]);
@@ -460,6 +470,7 @@ function RecordPage() {
     setSelectedIds([]);
     setSelectMode(false);
     setUndoTarget({ logs: targets });
+    setJustExpanded(false);
     await loadLogs(date);
     setDeleting(false);
   };
@@ -752,6 +763,8 @@ function RecordPage() {
       setError(`セットの展開に失敗しました: ${setInsertError.message}`);
     } else {
       setRoutineId("");
+      // 展開直後だけ「まとめて削除」の案内を出す
+      setJustExpanded(true);
     }
     await loadLogs(date);
     setApplying(false);
@@ -830,16 +843,29 @@ function RecordPage() {
             </button>
           </div>
 
-          {/* 間違ったルーティンを展開した直後にすぐ戻せるようにする */}
-          {logs.length > 0 && (
-            <button
-              type="button"
-              onClick={deleteAllOfDay}
-              disabled={deleting}
-              className="mt-2 w-full rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm font-semibold text-red-600 active:bg-red-100 disabled:opacity-40"
-            >
-              間違えて展開した? この日の種目をすべて削除({logs.length}件)
-            </button>
+          {/*
+            間違ったルーティンを展開した直後にすぐ戻せるようにする。
+            常時出すと邪魔なので、展開した直後だけ出して × で閉じられるようにする。
+          */}
+          {justExpanded && logs.length > 0 && (
+            <div className="mt-2 flex items-stretch gap-1 rounded-lg border border-red-200 bg-red-50">
+              <button
+                type="button"
+                onClick={deleteAllOfDay}
+                disabled={deleting}
+                className="min-w-0 flex-1 rounded-l-lg px-3 py-3 text-left text-sm font-semibold text-red-600 active:bg-red-100 disabled:opacity-40"
+              >
+                間違えて展開した? この日の種目をすべて削除({logs.length}件)
+              </button>
+              <button
+                type="button"
+                onClick={() => setJustExpanded(false)}
+                aria-label="この案内を閉じる"
+                className="flex w-12 shrink-0 items-center justify-center rounded-r-lg text-xl leading-none text-red-400 active:bg-red-100"
+              >
+                ×
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -882,6 +908,12 @@ function RecordPage() {
               {selectedIds.length}件を選択中
             </span>
           </div>
+        )}
+
+        {selectMode && (
+          <p className="mb-2 text-xs text-gray-500">
+            この日の種目をまとめて消すときは「すべて選択」→ 下の削除ボタン
+          </p>
         )}
 
         {loading ? (

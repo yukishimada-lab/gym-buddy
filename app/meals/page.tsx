@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import HelpButton from "@/components/HelpButton";
+import PhotoPreview from "@/components/PhotoPreview";
 import { compressImage, imageErrorMessage } from "@/lib/image";
 import { postJson } from "@/lib/apiClient";
 import {
@@ -211,6 +212,8 @@ function MealsPage() {
   // 写真解析
   const [analyzing, setAnalyzing] = useState(false);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
+  // 解析した写真をその場で見返せるようにしておく(写真アプリに切り替えずに確認できる)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoNote, setPhotoNote] = useState<string | null>(null);
   // 失敗の理由は注記と分けて赤字で出す(何が起きたか分かるように)
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -224,6 +227,12 @@ function MealsPage() {
 
   // 既存記録の編集
   const [edit, setEdit] = useState<EditState | null>(null);
+
+  // 写真が差し替わったときと画面を離れるときに、古い object URL を解放する
+  useEffect(() => {
+    if (!photoPreview) return;
+    return () => URL.revokeObjectURL(photoPreview);
+  }, [photoPreview]);
 
   /** マイ商品(自分で登録した商品)を読み込む */
   const loadProducts = useCallback(async () => {
@@ -490,6 +499,7 @@ function MealsPage() {
       }
       setDrafts([]);
       setPhotoPath(null);
+      setPhotoPreview(null);
       setPhotoNote(null);
       setSearchNote(null);
       await loadLogs(date);
@@ -507,6 +517,8 @@ function MealsPage() {
     try {
       // iPhone の HEIC もここで JPEG になる(長辺 1500px まで縮小)
       const { blob, base64, mimeType } = await compressImage(file);
+      // 解析に出したのと同じ画像を画面に残す(結果と見比べられるように)
+      setPhotoPreview(URL.createObjectURL(blob));
 
       // 解析(サーバー側 API 経由で Gemini を呼ぶ)
       const res = await postJson<{ items?: EstimatedFoodItem[] }>(
@@ -1111,6 +1123,17 @@ function MealsPage() {
               </p>
             )}
           </div>
+        )}
+
+        {/* 解析に使った写真(結果と見比べるためにこの画面に残す) */}
+        {photoPreview && (
+          <PhotoPreview
+            key={photoPreview}
+            url={photoPreview}
+            title="この写真から推定しました"
+            hint="タップすると拡大できます。下の品目・グラム数が合っているか見比べてください。"
+            className="mb-3"
+          />
         )}
 
         {/* 下書き一覧(編集可能) */}

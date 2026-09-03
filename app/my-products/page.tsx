@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import HelpButton from "@/components/HelpButton";
+import PhotoPreview from "@/components/PhotoPreview";
 import { compressImage, imageErrorMessage } from "@/lib/image";
 import { postJson } from "@/lib/apiClient";
 import {
@@ -114,6 +115,14 @@ export default function MyProductsPage() {
   const [scanNote, setScanNote] = useState<string | null>(null);
   // 失敗の理由は注記と分けて赤字で出す(何が起きたか分かるように)
   const [scanError, setScanError] = useState<string | null>(null);
+  // 読み取った成分表示の写真。フォームの数値と見比べられるように画面に残す
+  const [scanPreview, setScanPreview] = useState<string | null>(null);
+
+  // 写真が差し替わったときと画面を離れるときに、古い object URL を解放する
+  useEffect(() => {
+    if (!scanPreview) return;
+    return () => URL.revokeObjectURL(scanPreview);
+  }, [scanPreview]);
   const formRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
@@ -146,10 +155,15 @@ export default function MyProductsPage() {
     );
   }, [products, query]);
 
-  /** フォームを開いてそこまでスクロールする */
-  const openForm = (next: FormState) => {
+  /**
+   * フォームを開いてそこまでスクロールする。
+   * 写真から読み取ったとき以外は、前に読み取った写真のプレビューは消す
+   * (別の商品の写真が残っていると紛らわしいため)。
+   */
+  const openForm = (next: FormState, keepPhoto = false) => {
     setForm(next);
     setNotice(null);
+    if (!keepPhoto) setScanPreview(null);
     // 描画後にスクロールしたいので次のフレームまで待つ
     requestAnimationFrame(() => {
       formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -167,6 +181,8 @@ export default function MyProductsPage() {
       // 成分表示の細かい文字を読ませたいので長辺 1500px を確保する。
       // iPhone の HEIC もここで JPEG に変換される。
       const { blob, base64, mimeType } = await compressImage(file, 1500);
+      // 読み取りに出したのと同じ画像を画面に残す(数値と見比べられるように)
+      setScanPreview(URL.createObjectURL(blob));
 
       const res = await postJson<{
         reading: NutritionLabelReading;
@@ -197,7 +213,7 @@ export default function MyProductsPage() {
         }
       }
 
-      openForm(formFromReading(reading, photoPath));
+      openForm(formFromReading(reading, photoPath), true);
       if (json.empty) {
         setScanNote(
           "栄養成分表示の数値を読み取れませんでした。表の部分が大きく写るように撮り直すか、下のフォームに手入力してください。"
@@ -267,6 +283,7 @@ export default function MyProductsPage() {
     } else {
       setNotice(form.id ? "更新しました。" : "マイ商品を登録しました。");
       setForm(null);
+      setScanPreview(null);
       setScanNote(null);
       await load();
     }
@@ -285,7 +302,10 @@ export default function MyProductsPage() {
     if (error) {
       setError(`削除に失敗しました: ${error.message}`);
     } else {
-      if (form?.id === p.id) setForm(null);
+      if (form?.id === p.id) {
+        setForm(null);
+        setScanPreview(null);
+      }
       await load();
     }
   };
@@ -426,13 +446,27 @@ export default function MyProductsPage() {
             </h2>
             <button
               type="button"
-              onClick={() => setForm(null)}
+              onClick={() => {
+                setForm(null);
+                setScanPreview(null);
+              }}
               aria-label="閉じる"
               className="rounded-lg bg-gray-100 p-1.5 text-gray-500 active:bg-gray-200"
             >
               <X aria-hidden size={16} />
             </button>
           </div>
+
+          {/* 読み取りに使った写真(数値と見比べるためにこの画面に残す) */}
+          {scanPreview && (
+            <PhotoPreview
+              key={scanPreview}
+              url={scanPreview}
+              title="この写真から読み取りました"
+              hint="タップすると拡大できます。下の数値が成分表示と合っているか見比べてください。"
+              className="mb-3"
+            />
+          )}
 
           <label className="block text-xs text-gray-500">
             商品名<span className="ml-1 text-red-500">必須</span>

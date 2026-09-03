@@ -104,6 +104,8 @@ export type MealLog = {
   meal_date: string; // YYYY-MM-DD
   meal_type: MealType;
   food_item_id: string | null;
+  /** マイ商品から記録した場合の参照(Phase 9 で追加。それ以外は null) */
+  my_product_id: string | null;
   food_name: string;
   amount_g: number | null;
   protein_g: number;
@@ -229,4 +231,54 @@ export type DaySummary = {
   meals: MealLog[];
   nutrition: NutritionTotals;
   body: BodyLog | null;
+};
+
+// ------------------------------------------------------------
+// Phase 9: マイ商品(成分表示から登録する自分専用の商品)
+// ------------------------------------------------------------
+
+/** 栄養成分の基準量 */
+export type MyProductBasis = "per_100g" | "per_serving" | "per_piece";
+
+/**
+ * マイ商品(ユーザー個人の商品マスタ)。
+ *
+ * protein_g / fat_g / carbs_g / calories は「basis で示した基準量あたり」の値。
+ * 100g あたりに直したいときは lib/myProducts.ts の per100() を使うこと。
+ */
+export type MyProduct = {
+  id: string;
+  user_id: string;
+  name: string;
+  maker: string | null;
+  basis: MyProductBasis;
+  /** 1食 / 1個 が何 g か(任意) */
+  serving_g: number | null;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  calories: number;
+  memo: string | null;
+  is_favorite: boolean;
+  use_count: number;
+  last_used_at: string | null;
+  photo_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 栄養成分表示の写真から Gemini が読み取った内容(そのまま登録フォームに流し込む) */
+export type NutritionLabelReading = {
+  name: string | null;
+  maker: string | null;
+  basis: MyProductBasis;
+  /** ラベルに書かれていた基準量の文言(例: 「1食(40g)あたり」) */
+  basis_text: string | null;
+  serving_g: number | null;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  calories: number;
+  /** 読み取り時の補足(例: 炭水化物は糖質+食物繊維から算出) */
+  note: string | null;
 };

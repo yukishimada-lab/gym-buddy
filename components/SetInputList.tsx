@@ -1,6 +1,7 @@
 "use client";
 
 import type { SetInput } from "@/lib/types";
+import { Plus, X } from "lucide-react";
 import { totalVolume } from "@/lib/workoutStats";
 
 /**
@@ -109,7 +110,7 @@ export default function SetInputList({
                 aria-label={`${index + 1}セット目を削除`}
                 className="shrink-0 rounded-lg px-2 py-2 text-sm text-red-500 active:bg-red-50"
               >
-                ✕
+                <X aria-hidden size={16} />
               </button>
             </li>
           ))}
@@ -121,7 +122,10 @@ export default function SetInputList({
         onClick={() => onChange([...sets, nextSet(sets)])}
         className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-semibold text-gray-600 active:bg-gray-100"
       >
-        ＋ セットを追加
+        <span className="inline-flex items-center justify-center gap-1">
+          <Plus aria-hidden size={16} />
+          セットを追加
+        </span>
       </button>
     </div>
   );

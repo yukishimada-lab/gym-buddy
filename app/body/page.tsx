@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Scale,
+  Target,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import BodyTrendCharts, { type TrendRange } from "@/components/BodyTrendCharts";
 import { formatDateLabel, todayString } from "@/lib/date";
@@ -189,12 +196,17 @@ export default function BodyPage() {
   return (
     <main className="p-4">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">⚖️ からだ</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <Scale aria-hidden size={20} strokeWidth={2} />
+          からだ
+        </h1>
         <Link
           href="/body/goal"
-          className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
+          className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
         >
-          🎯 目標と分析 ›
+          <Target aria-hidden size={14} />
+          目標と分析
+          <ChevronRight aria-hidden size={14} />
         </Link>
       </div>
 
@@ -257,8 +269,13 @@ export default function BodyPage() {
               <span className="text-xs font-semibold text-gray-600">
                 InBody の項目(任意)
               </span>
-              <span className="text-xs text-blue-600">
-                {inbodyOpen ? "閉じる ▲" : "開く ▼"}
+              <span className="flex items-center gap-1 text-xs text-blue-600">
+                {inbodyOpen ? "閉じる" : "開く"}
+                {inbodyOpen ? (
+                  <ChevronUp aria-hidden size={14} />
+                ) : (
+                  <ChevronDown aria-hidden size={14} />
+                )}
               </span>
             </button>
 

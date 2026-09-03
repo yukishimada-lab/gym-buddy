@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
+import { GripVertical, NotebookPen, StickyNote } from "lucide-react";
 import {
   formatDateLabel,
   formatShortDateLabel,
@@ -97,16 +98,14 @@ function ExerciseHeading({ log }: { log: WorkoutLogWithExercise }) {
 }
 
 /**
- * メモの表示(📝 + 本文)。
+ * メモの表示(メモのアイコン + 本文)。
  * 一覧が窮屈にならないよう 2 行までに抑え、続きは編集画面で読む。
  * ボタンの中にも置くので、要素は span だけで組む。
  */
 function MemoLine({ memo }: { memo: string }) {
   return (
     <span className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-left text-xs leading-relaxed text-amber-900">
-      <span aria-hidden className="shrink-0">
-        📝
-      </span>
+      <StickyNote aria-hidden size={14} className="mt-0.5 shrink-0" />
       <span className="line-clamp-2 min-w-0 flex-1 break-words whitespace-pre-wrap">
         {memo}
       </span>
@@ -778,7 +777,10 @@ function RecordPage() {
   return (
     <main className="p-4">
       <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold">💪 ワークアウト記録</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <NotebookPen aria-hidden size={20} strokeWidth={2} />
+          ワークアウト記録
+        </h1>
         <button
           onClick={signOut}
           className="rounded-lg px-2 py-1 text-xs text-gray-500 active:bg-gray-200"
@@ -892,7 +894,10 @@ function RecordPage() {
         </div>
 
         {!selectMode && logs.length > 1 && (
-          <p className="mb-2 text-xs text-gray-500">⠿ を長押しで並べ替え</p>
+          <p className="mb-2 flex items-center gap-1 text-xs text-gray-500">
+            <GripVertical aria-hidden size={14} className="text-gray-400" />
+            を長押しで並べ替え
+          </p>
         )}
 
         {selectMode && (

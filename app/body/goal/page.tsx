@@ -12,14 +12,25 @@ import {
   formatDate,
   type GoalAnalysis,
 } from "@/lib/bodyAnalysis";
+import {
+  ChevronLeft,
+  CircleCheck,
+  Scale,
+  Sparkles,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import type { BodyGoal, GoalMode } from "@/lib/types";
 
 const PHASE4_SETUP_HINT = "(supabase/phase4.sql を実行済みか確認してください)";
 
-const MODES: { value: GoalMode; label: string; icon: string }[] = [
-  { value: "bulk", label: "増量", icon: "📈" },
-  { value: "cut", label: "減量", icon: "📉" },
-  { value: "maintain", label: "維持", icon: "⚖️" },
+const MODES: { value: GoalMode; label: string; Icon: LucideIcon }[] = [
+  { value: "bulk", label: "増量", Icon: TrendingUp },
+  { value: "cut", label: "減量", Icon: TrendingDown },
+  { value: "maintain", label: "維持", Icon: Scale },
 ];
 
 /** カロリー/タンパク質の過不足を「許容範囲」とみなす幅 */
@@ -44,7 +55,7 @@ function StatusBadge({
   status: "good" | "warning";
   children: React.ReactNode;
 }) {
-  const icon = status === "good" ? "✅" : "⚠️";
+  const Icon = status === "good" ? CircleCheck : TriangleAlert;
   const className =
     status === "good"
       ? "bg-emerald-50 text-emerald-700"
@@ -53,7 +64,7 @@ function StatusBadge({
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${className}`}
     >
-      <span aria-hidden>{icon}</span>
+      <Icon aria-hidden size={14} strokeWidth={2} />
       {children}
     </span>
   );
@@ -226,12 +237,16 @@ export default function BodyGoalPage() {
   return (
     <main className="p-4">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">🎯 目標と分析</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <Target aria-hidden size={20} strokeWidth={2} />
+          目標と分析
+        </h1>
         <Link
           href="/body"
-          className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-600 active:bg-gray-200"
+          className="flex items-center gap-1 rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-600 active:bg-gray-200"
         >
-          ‹ からだ
+          <ChevronLeft aria-hidden size={14} />
+          からだ
         </Link>
       </div>
 
@@ -260,13 +275,14 @@ export default function BodyGoalPage() {
                   type="button"
                   onClick={() => setMode(m.value)}
                   aria-pressed={mode === m.value}
-                  className={`rounded-lg py-2 text-xs font-semibold ${
+                  className={`flex flex-col items-center justify-center gap-1 rounded-lg py-2 text-xs font-semibold ${
                     mode === m.value
                       ? "bg-blue-600 text-white"
                       : "bg-gray-100 text-gray-600 active:bg-gray-200"
                   }`}
                 >
-                  {m.icon} {m.label}
+                  <m.Icon aria-hidden size={16} strokeWidth={2} />
+                  {m.label}
                 </button>
               ))}
             </div>
@@ -529,8 +545,9 @@ export default function BodyGoalPage() {
 
           {/* AI アドバイス */}
           <section className="rounded-xl bg-white p-3 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold text-gray-600">
-              🤖 AI からのアドバイス
+            <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-gray-600">
+              <Sparkles aria-hidden size={16} strokeWidth={2} />
+              AI からのアドバイス
             </h2>
             <p className="mb-3 text-xs text-gray-500">
               体重推移・目標・直近の食事傾向・トレーニング頻度をもとに、AI

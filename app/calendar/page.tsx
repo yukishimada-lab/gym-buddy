@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { CalendarDays, StickyNote } from "lucide-react";
 import { VIZ } from "@/lib/viz";
 import {
   WEEKDAY_LABELS,
@@ -223,7 +224,10 @@ function CalendarPage() {
   return (
     <main className="p-4">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">📅 カレンダー</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <CalendarDays aria-hidden size={20} strokeWidth={2} />
+          カレンダー
+        </h1>
         <Link
           href="/history"
           className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 active:bg-gray-200"
@@ -384,9 +388,11 @@ function CalendarPage() {
                             {/* その日その種目のメモ(あれば) */}
                             {hasMemo(log.memo) && (
                               <p className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-amber-900">
-                                <span aria-hidden className="shrink-0">
-                                  📝
-                                </span>
+                                <StickyNote
+                                  aria-hidden
+                                  size={12}
+                                  className="mt-0.5 shrink-0"
+                                />
                                 <span className="min-w-0 flex-1">
                                   {memoText(log.memo)}
                                 </span>

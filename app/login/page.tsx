@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Dumbbell } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 /** 対応しているログイン方法(Supabase の OAuth プロバイダ名と同じ) */
@@ -49,7 +50,9 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-8 p-6">
       <div className="text-center">
-        <p className="text-5xl">💪</p>
+        <p className="flex justify-center text-blue-600">
+          <Dumbbell aria-hidden size={48} strokeWidth={1.75} />
+        </p>
         <h1 className="mt-3 text-3xl font-bold">gym-buddy</h1>
         <p className="mt-2 text-sm text-gray-500">
           ジムでのトレーニングをサクッと記録

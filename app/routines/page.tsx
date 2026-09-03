@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { ClipboardList, GripVertical, X } from "lucide-react";
 import SortableList from "@/components/SortableList";
 import type {
   Exercise,
@@ -226,10 +227,19 @@ export default function RoutinesPage() {
 
   return (
     <main className="p-4">
-      <h1 className="mb-4 text-xl font-bold">📋 ルーティン</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
+        <ClipboardList aria-hidden size={20} strokeWidth={2} />
+        ルーティン
+      </h1>
       <p className="mb-4 text-xs text-gray-500">
         「胸の日」「脚の日」のような種目の組み合わせを保存しておくと、記録ページからワンタップでその日の記録に展開できます。
-        種目の順番は ⠿ を長押ししてドラッグすると並べ替えられます。
+        種目の順番は
+        <GripVertical
+          aria-hidden
+          size={14}
+          className="mx-0.5 inline-block align-text-bottom text-gray-400"
+        />
+        を長押ししてドラッグすると並べ替えられます。
       </p>
 
       {error && (
@@ -404,7 +414,7 @@ export default function RoutinesPage() {
                             className="shrink-0 rounded-lg px-1.5 py-1.5 text-sm text-red-500 active:bg-red-50"
                             aria-label={`${item.exercises?.name ?? "この種目"}をルーティンから外す`}
                           >
-                            ✕
+                            <X aria-hidden size={16} />
                           </button>
                         </div>
                       )

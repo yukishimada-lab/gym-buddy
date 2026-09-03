@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { Dumbbell } from "lucide-react";
 import { DEFAULT_EXERCISES } from "@/lib/defaultExercises";
 import {
   MUSCLE_GROUPS,
@@ -138,7 +139,10 @@ export default function ExercisesPage() {
 
   return (
     <main className="p-4">
-      <h1 className="mb-4 text-xl font-bold">🏋️ 種目マスタ</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
+        <Dumbbell aria-hidden size={20} strokeWidth={2} />
+        種目マスタ
+      </h1>
 
       {error && (
         <p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-600">

@@ -1,5 +1,6 @@
 "use client";
 
+import { StickyNote } from "lucide-react";
 import { VIZ } from "@/lib/viz";
 import { formatDateLabel } from "@/lib/date";
 import {
@@ -384,7 +385,12 @@ export default function DaySummaryCard({
                           wordBreak: "break-word",
                         }}
                       >
-                        <span style={{ flexShrink: 0 }}>📝</span>
+                        <StickyNote
+                          aria-hidden
+                          size={14}
+                          strokeWidth={2}
+                          style={{ flexShrink: 0, marginTop: 2 }}
+                        />
                         <span>{memoText(log.memo)}</span>
                       </div>
                     )}

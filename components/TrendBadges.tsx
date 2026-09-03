@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  ArrowDown,
+  ArrowUp,
+  Minus,
+  type LucideIcon,
+} from "lucide-react";
 import { VIZ } from "@/lib/viz";
 import { formatShortDateLabel } from "@/lib/date";
 import {
@@ -13,18 +19,23 @@ import {
  * 同じ種目の「前回の記録」と比べた伸び / 落ちの表示。
  *
  * 判定は「その種目の最大重量」と「総ボリューム(重量 × 回数の合計)」の両方。
- * 伸びは青、落ちは赤にするが、色だけに頼らないよう ↑ ↓ の矢印と
+ * 伸びは青、落ちは赤にするが、色だけに頼らないよう 上下の矢印アイコンと
  * 「+2.5kg」のような差分の数値を必ず併記している。
  * 前回記録が無い種目には色を付けない。
  */
 
 const STYLE: Record<
   MetricComparison["direction"],
-  { color: string; background: string; arrow: string; word: string }
+  { color: string; background: string; Arrow: LucideIcon; word: string }
 > = {
-  up: { color: VIZ.up, background: VIZ.upTint, arrow: "↑", word: "増" },
-  down: { color: VIZ.down, background: VIZ.downTint, arrow: "↓", word: "減" },
-  same: { color: VIZ.textSecondary, background: "#f3f3f1", arrow: "→", word: "変化なし" },
+  up: { color: VIZ.up, background: VIZ.upTint, Arrow: ArrowUp, word: "増" },
+  down: { color: VIZ.down, background: VIZ.downTint, Arrow: ArrowDown, word: "減" },
+  same: {
+    color: VIZ.textSecondary,
+    background: "#f3f3f1",
+    Arrow: Minus,
+    word: "変化なし",
+  },
 };
 
 function Badge({
@@ -57,9 +68,7 @@ function Badge({
         {format(value)}
         {unit}
       </span>
-      <span aria-hidden className="font-bold">
-        {style.arrow}
-      </span>
+      <style.Arrow aria-hidden size={12} strokeWidth={2.5} />
       <span className="tabular-nums">{deltaText}</span>
       <span className="sr-only">({style.word})</span>
     </span>

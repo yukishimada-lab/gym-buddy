@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { BookOpen, StickyNote } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateLabel } from "@/lib/date";
 import {
@@ -52,7 +53,10 @@ export default function HistoryPage() {
   return (
     <main className="p-4">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">📖 履歴</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <BookOpen aria-hidden size={20} strokeWidth={2} />
+          履歴
+        </h1>
         <Link
           href="/calendar"
           className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 active:bg-gray-200"
@@ -107,9 +111,11 @@ export default function HistoryPage() {
                       {/* メモがあることが一覧でも分かるようにする(1 行だけ) */}
                       {hasMemo(log.memo) && (
                         <p className="flex items-center gap-1 text-xs text-amber-700">
-                          <span aria-hidden className="shrink-0">
-                            📝
-                          </span>
+                          <StickyNote
+                            aria-hidden
+                            size={12}
+                            className="shrink-0"
+                          />
                           <span className="min-w-0 truncate">
                             {memoText(log.memo)}
                           </span>

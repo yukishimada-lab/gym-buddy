@@ -1,5 +1,6 @@
 "use client";
 
+import { GripVertical } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   DndContext,
@@ -29,7 +30,7 @@ import { CSS } from "@dnd-kit/utilities";
  * 縦並びのリストをドラッグ&ドロップで並べ替えるための共通コンポーネント。
  *
  * スマホのタッチ操作を前提にしているため:
- * - つまむ場所を専用の「⠿ ハンドル」に限定する(カード全体をドラッグ対象にしない)
+ * - つまむ場所を専用のハンドルに限定する(カード全体をドラッグ対象にしない)
  * - ハンドルに touch-action: none を当てて、指の動きをドラッグに使う
  * - TouchSensor は 100ms の長押しで起動。リストの外を触れば今までどおりスクロールできる
  * - MouseSensor / KeyboardSensor も併用(PC・キーボード操作でも並べ替えできる)
@@ -60,9 +61,7 @@ function DragHandle({
       {...attributes}
       {...listeners}
     >
-      <span aria-hidden className="text-lg leading-none">
-        ⠿
-      </span>
+      <GripVertical aria-hidden size={18} />
     </button>
   );
 }

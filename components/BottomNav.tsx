@@ -44,7 +44,10 @@ export default function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)]">
+    <nav
+      data-tour="bottom-nav"
+      className="fixed inset-x-0 bottom-0 z-10 border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)]"
+    >
       <div className="mx-auto flex max-w-md">
         {tabs.map(({ href, label, Icon, extraPaths }) => {
           const active =

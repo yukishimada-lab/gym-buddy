@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import BodyTrendCharts, { type TrendRange } from "@/components/BodyTrendCharts";
+import HelpButton from "@/components/HelpButton";
 import { formatDateLabel, todayString } from "@/lib/date";
 import type { BodyLog } from "@/lib/types";
 
@@ -200,14 +201,18 @@ export default function BodyPage() {
           <Scale aria-hidden size={20} strokeWidth={2} />
           からだ
         </h1>
-        <Link
-          href="/body/goal"
-          className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
-        >
-          <Target aria-hidden size={14} />
-          目標と分析
-          <ChevronRight aria-hidden size={14} />
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/body/goal"
+            data-tour="body-goal"
+            className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
+          >
+            <Target aria-hidden size={14} />
+            目標と分析
+            <ChevronRight aria-hidden size={14} />
+          </Link>
+          <HelpButton tour="body" />
+        </div>
       </div>
 
       {error && (
@@ -224,7 +229,7 @@ export default function BodyPage() {
       ) : (
         <>
           {/* 推移グラフ */}
-          <section className="mb-4">
+          <section data-tour="body-charts" className="mb-4">
             <h2 className="mb-2 text-sm font-semibold text-gray-600">推移</h2>
             <BodyTrendCharts
               logs={logs}
@@ -234,7 +239,10 @@ export default function BodyPage() {
           </section>
 
           {/* 記録フォーム(体重 + InBody を 1 画面にまとめる) */}
-          <section className="mb-4 rounded-xl bg-white p-3 shadow-sm">
+          <section
+            data-tour="body-form"
+            className="mb-4 rounded-xl bg-white p-3 shadow-sm"
+          >
             <h2 className="mb-2 text-sm font-semibold text-gray-600">記録する</h2>
             <label className="block text-xs text-gray-500">
               日付
@@ -245,7 +253,10 @@ export default function BodyPage() {
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
               />
             </label>
-            <label className="mt-2 block text-xs text-gray-500">
+            <label
+              data-tour="body-weight"
+              className="mt-2 block text-xs text-gray-500"
+            >
               体重(kg)<span className="ml-1 text-red-500">必須</span>
               <input
                 type="number"
@@ -262,6 +273,7 @@ export default function BodyPage() {
             {/* InBody は測れた日だけ入力すればよいので、初期状態は折りたたむ */}
             <button
               type="button"
+              data-tour="body-inbody"
               onClick={() => setInbodyOpen((v) => !v)}
               aria-expanded={inbodyOpen}
               className="mt-3 flex w-full items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-left active:bg-gray-100"
@@ -316,6 +328,7 @@ export default function BodyPage() {
 
             <button
               onClick={save}
+              data-tour="body-save"
               disabled={saving}
               className="mt-3 w-full rounded-lg bg-blue-600 py-3 font-semibold text-white active:opacity-80 disabled:opacity-50"
             >
@@ -328,7 +341,7 @@ export default function BodyPage() {
           </section>
 
           {/* 記録一覧(グラフの値を数値でも確認できる表ビュー) */}
-          <section className="rounded-xl bg-white p-3 shadow-sm">
+          <section data-tour="body-list" className="rounded-xl bg-white p-3 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold text-gray-600">記録一覧</h2>
             {logsDesc.length === 0 ? (
               <p className="py-6 text-center text-sm text-gray-400">

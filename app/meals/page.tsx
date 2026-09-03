@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import HelpButton from "@/components/HelpButton";
 import { compressImage } from "@/lib/image";
 import {
   type AmountMode,
@@ -659,18 +660,22 @@ function MealsPage() {
           <UtensilsCrossed aria-hidden size={20} strokeWidth={2} />
           食事記録
         </h1>
-        <Link
-          href="/my-products"
-          className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
-        >
-          <Package aria-hidden size={14} />
-          マイ商品
-          <ChevronRight aria-hidden size={14} />
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/my-products"
+            data-tour="meals-my-products"
+            className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white active:opacity-80"
+          >
+            <Package aria-hidden size={14} />
+            マイ商品
+            <ChevronRight aria-hidden size={14} />
+          </Link>
+          <HelpButton tour="meals" />
+        </div>
       </div>
 
       {/* 日付選択 */}
-      <div className="mb-4 rounded-xl bg-white p-3 shadow-sm">
+      <div data-tour="meals-date" className="mb-4 rounded-xl bg-white p-3 shadow-sm">
         <label className="mb-1 block text-xs font-semibold text-gray-500">
           日付
         </label>
@@ -690,7 +695,10 @@ function MealsPage() {
       )}
 
       {/* 日別合計 */}
-      <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+      <div
+        data-tour="meals-totals"
+        className="mb-4 rounded-xl bg-white p-4 shadow-sm"
+      >
         <h2 className="mb-2 text-sm font-semibold text-gray-600">
           この日の合計
         </h2>
@@ -717,7 +725,7 @@ function MealsPage() {
       </div>
 
       {/* 食事タイミングごとの一覧 */}
-      <section className="mb-4 space-y-3">
+      <section data-tour="meals-list" className="mb-4 space-y-3">
         {loading ? (
           <p className="py-6 text-center text-sm text-gray-400">読み込み中...</p>
         ) : logs.length === 0 ? (
@@ -862,7 +870,7 @@ function MealsPage() {
         <h2 className="mb-2 text-sm font-semibold text-gray-600">食事を追加</h2>
 
         {/* タイミング選択 */}
-        <div className="mb-3 grid grid-cols-4 gap-1">
+        <div data-tour="meals-type" className="mb-3 grid grid-cols-4 gap-1">
           {MEAL_TYPES.map((mt) => (
             <button
               key={mt.value}
@@ -881,7 +889,7 @@ function MealsPage() {
         </div>
 
         {/* 入力方法タブ */}
-        <div className="mb-3 grid grid-cols-4 gap-1">
+        <div data-tour="meals-mode" className="mb-3 grid grid-cols-4 gap-1">
           {(
             [
               ["product", "マイ商品", Package],
@@ -893,6 +901,7 @@ function MealsPage() {
             <button
               key={value}
               type="button"
+              data-tour={`meals-mode-${value}`}
               onClick={() => selectMode(value)}
               className={`flex flex-col items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-semibold ${
                 mode === value
@@ -1225,6 +1234,7 @@ function MealsPage() {
 
         <button
           type="button"
+          data-tour="meals-manual"
           onClick={addEmptyDraft}
           className="mb-3 w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm text-gray-500 active:bg-gray-50"
         >
@@ -1233,6 +1243,7 @@ function MealsPage() {
 
         <button
           type="button"
+          data-tour="meals-save"
           onClick={saveDrafts}
           disabled={saving || drafts.every((d) => !d.food_name.trim())}
           className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white active:opacity-80 disabled:opacity-40"

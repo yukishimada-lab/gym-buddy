@@ -25,6 +25,7 @@ import {
 } from "@/lib/workoutStats";
 import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
 import ShareDaySummary from "@/components/ShareDaySummary";
+import HelpButton from "@/components/HelpButton";
 import type {
   BodyLog,
   DaySummary,
@@ -228,12 +229,16 @@ function CalendarPage() {
           <CalendarDays aria-hidden size={20} strokeWidth={2} />
           カレンダー
         </h1>
-        <Link
-          href="/history"
-          className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 active:bg-gray-200"
-        >
-          リストで見る ›
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/history"
+            data-tour="calendar-history"
+            className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 active:bg-gray-200"
+          >
+            リストで見る ›
+          </Link>
+          <HelpButton tour="calendar" />
+        </div>
       </div>
 
       {error && (
@@ -244,7 +249,10 @@ function CalendarPage() {
 
       <section className="mb-3 rounded-xl bg-white p-3 shadow-sm">
         {/* 月の切り替え */}
-        <div className="mb-2 flex items-center justify-between">
+        <div
+          data-tour="calendar-month"
+          className="mb-2 flex items-center justify-between"
+        >
           <button
             type="button"
             onClick={() => setYm(shiftMonth(ym, -1))}
@@ -276,7 +284,7 @@ function CalendarPage() {
         </div>
 
         {/* 日付のマス目 */}
-        <div className="grid grid-cols-7 gap-0.5">
+        <div data-tour="calendar-grid" className="grid grid-cols-7 gap-0.5">
           {cells.map((cell) => {
             const day = summary.get(cell.date);
             const isSelected = cell.date === selected;
@@ -328,7 +336,10 @@ function CalendarPage() {
         </div>
 
         {/* 凡例 */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-100 pt-2 text-xs text-gray-600">
+        <div
+          data-tour="calendar-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-100 pt-2 text-xs text-gray-600"
+        >
           <span className="flex items-center gap-1.5">
             <WorkoutMark />
             {MARK.workout.label}
@@ -342,7 +353,7 @@ function CalendarPage() {
       </section>
 
       {/* 選択した日の詳細 */}
-      <section className="rounded-xl bg-white p-3 shadow-sm">
+      <section data-tour="calendar-detail" className="rounded-xl bg-white p-3 shadow-sm">
         <h2 className="mb-2 text-sm font-bold">{formatDateLabel(selected)}</h2>
 
         {loadingDay ? (
@@ -444,11 +455,11 @@ function CalendarPage() {
               </div>
             )}
 
-            <div className="mb-2">
+            <div data-tour="calendar-share" className="mb-2">
               <ShareDaySummary summary={daySummary} disabled={!hasAnyRecord} />
             </div>
 
-            <div className="flex gap-2">
+            <div data-tour="calendar-open" className="flex gap-2">
               <Link
                 href={`/?date=${selected}`}
                 className="flex-1 rounded-lg bg-blue-600 py-2.5 text-center text-sm font-semibold text-white active:opacity-80"

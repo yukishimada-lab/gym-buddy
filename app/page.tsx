@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
+import HelpButton from "@/components/HelpButton";
 import { GripVertical, NotebookPen, StickyNote } from "lucide-react";
 import {
   formatDateLabel,
@@ -781,16 +782,20 @@ function RecordPage() {
           <NotebookPen aria-hidden size={20} strokeWidth={2} />
           ワークアウト記録
         </h1>
-        <button
-          onClick={signOut}
-          className="rounded-lg px-2 py-1 text-xs text-gray-500 active:bg-gray-200"
-        >
-          ログアウト
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={signOut}
+            className="rounded-lg px-2 py-1 text-xs text-gray-500 active:bg-gray-200"
+          >
+            ログアウト
+          </button>
+          {/* 初めての人には、読み込みが終わったタイミングで自動的に案内を出す */}
+          <HelpButton tour="record" autoStart={!loading} />
+        </div>
       </header>
 
       {/* 日付選択 */}
-      <div className="mb-4 rounded-xl bg-white p-3 shadow-sm">
+      <div data-tour="record-date" className="mb-4 rounded-xl bg-white p-3 shadow-sm">
         <div className="mb-1 flex items-center justify-between">
           <label className="block text-xs font-semibold text-gray-500">
             日付
@@ -819,7 +824,10 @@ function RecordPage() {
 
       {/* ルーティン展開 */}
       {routines.length > 0 && (
-        <div className="mb-4 rounded-xl bg-white p-3 shadow-sm">
+        <div
+          data-tour="record-routine"
+          className="mb-4 rounded-xl bg-white p-3 shadow-sm"
+        >
           <label className="mb-1 block text-xs font-semibold text-gray-500">
             ルーティンから一括追加
           </label>
@@ -881,6 +889,7 @@ function RecordPage() {
           {logs.length > 0 && (
             <button
               type="button"
+              data-tour="record-select"
               onClick={toggleSelectMode}
               className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold active:opacity-80 ${
                 selectMode
@@ -976,7 +985,10 @@ function RecordPage() {
               const prevMemo = previousMemos.get(log.exercise_id) ?? null;
 
               return (
-                <div className="rounded-xl bg-white p-3 shadow-sm">
+                <div
+                  data-tour="record-card"
+                  className="rounded-xl bg-white p-3 shadow-sm"
+                >
                   {isEditing ? (
                     <div>
                       <p className="mb-2 font-semibold">{exerciseName(log)}</p>
@@ -1027,12 +1039,14 @@ function RecordPage() {
 
                       <div className="pl-9">
                         <SetLines sets={sets} />
-                        <TrendBadges
-                          comparison={comparison}
-                          maxWeight={maxWeight(sets)}
-                          totalVolume={totalVolume(sets)}
-                          weightless={sets.length > 0 && !hasWeight(sets)}
-                        />
+                        <div data-tour="record-trend">
+                          <TrendBadges
+                            comparison={comparison}
+                            maxWeight={maxWeight(sets)}
+                            totalVolume={totalVolume(sets)}
+                            weightless={sets.length > 0 && !hasWeight(sets)}
+                          />
+                        </div>
 
                         {/* メモ(その日のその種目の書き置き) */}
                         {isMemoEditing ? (
@@ -1102,6 +1116,7 @@ function RecordPage() {
                         ) : memo !== "" ? (
                           <button
                             type="button"
+                            data-tour="record-memo"
                             onClick={() => startMemoEdit(log)}
                             aria-label={`${exerciseName(log)}のメモを編集`}
                             className="block w-full active:opacity-70"
@@ -1112,6 +1127,7 @@ function RecordPage() {
                           <div className="mt-2 flex items-center gap-2">
                             <button
                               type="button"
+                              data-tour="record-memo"
                               onClick={() => startMemoEdit(log)}
                               className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 active:bg-gray-200"
                             >
@@ -1140,7 +1156,7 @@ function RecordPage() {
       </section>
 
       {/* 追加フォーム */}
-      <section className="rounded-xl bg-white p-3 shadow-sm">
+      <section data-tour="record-add" className="rounded-xl bg-white p-3 shadow-sm">
         <h2 className="mb-2 text-sm font-semibold text-gray-600">記録を追加</h2>
         {exercises.length === 0 && !loading ? (
           <p className="text-sm text-gray-500">
@@ -1163,11 +1179,9 @@ function RecordPage() {
               ))}
             </select>
 
-            <SetInputList
-              sets={newSets}
-              onChange={setNewSets}
-              idPrefix="new"
-            />
+            <div data-tour="record-sets">
+              <SetInputList sets={newSets} onChange={setNewSets} idPrefix="new" />
+            </div>
 
             <button
               type="submit"

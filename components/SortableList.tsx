@@ -55,6 +55,8 @@ function DragHandle({
     <button
       type="button"
       aria-label={label}
+      // 使い方ガイドがこのつまみを指せるようにする(見た目には影響しない)
+      data-tour="drag-handle"
       // touch-action: none がないと、指の動きがページスクロールに取られてドラッグできない
       style={{ touchAction: "none" }}
       className="flex h-10 w-8 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-gray-400 active:bg-gray-100 active:text-gray-600"

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import HelpButton from "@/components/HelpButton";
 import { ClipboardList, GripVertical, X } from "lucide-react";
 import SortableList from "@/components/SortableList";
 import type {
@@ -227,10 +228,13 @@ export default function RoutinesPage() {
 
   return (
     <main className="p-4">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
-        <ClipboardList aria-hidden size={20} strokeWidth={2} />
-        ルーティン
-      </h1>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <ClipboardList aria-hidden size={20} strokeWidth={2} />
+          ルーティン
+        </h1>
+        <HelpButton tour="routines" />
+      </div>
       <p className="mb-4 text-xs text-gray-500">
         「胸の日」「脚の日」のような種目の組み合わせを保存しておくと、記録ページからワンタップでその日の記録に展開できます。
         種目の順番は
@@ -251,6 +255,7 @@ export default function RoutinesPage() {
       {/* 作成フォーム */}
       <form
         onSubmit={addRoutine}
+        data-tour="routines-create"
         className="mb-4 rounded-xl bg-white p-3 shadow-sm"
       >
         <h2 className="mb-2 text-sm font-semibold text-gray-600">
@@ -291,6 +296,7 @@ export default function RoutinesPage() {
                   <p className="truncate font-bold">{routine.name}</p>
                   <div className="flex shrink-0 gap-1">
                     <button
+                      data-tour="routines-add-item"
                       onClick={() => {
                         setOpenId(isOpen ? null : routine.id);
                         setItemExerciseId("");
@@ -392,7 +398,7 @@ export default function RoutinesPage() {
                           </div>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1">
+                        <div data-tour="routines-item" className="flex items-center gap-1">
                           {dragHandle}
                           <span className="min-w-0 flex-1 truncate text-sm text-gray-700">
                             {item.exercises?.name ?? "(削除された種目)"}

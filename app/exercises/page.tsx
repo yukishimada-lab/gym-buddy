@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import HelpButton from "@/components/HelpButton";
 import { Dumbbell } from "lucide-react";
 import { DEFAULT_EXERCISES } from "@/lib/defaultExercises";
 import {
@@ -139,10 +140,13 @@ export default function ExercisesPage() {
 
   return (
     <main className="p-4">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
-        <Dumbbell aria-hidden size={20} strokeWidth={2} />
-        種目マスタ
-      </h1>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <Dumbbell aria-hidden size={20} strokeWidth={2} />
+          種目マスタ
+        </h1>
+        <HelpButton tour="exercises" />
+      </div>
 
       {error && (
         <p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-600">
@@ -153,12 +157,14 @@ export default function ExercisesPage() {
       {/* 追加フォーム */}
       <form
         onSubmit={addExercise}
+        data-tour="exercises-add"
         className="mb-4 rounded-xl bg-white p-3 shadow-sm"
       >
         <h2 className="mb-2 text-sm font-semibold text-gray-600">種目を追加</h2>
         <div className="flex gap-2">
           <select
             value={muscleGroup}
+            data-tour="exercises-muscle"
             onChange={(e) => setMuscleGroup(e.target.value)}
             className="w-24 shrink-0 rounded-lg border border-gray-300 px-2 py-2"
           >
@@ -194,6 +200,7 @@ export default function ExercisesPage() {
           </p>
           <button
             onClick={seedDefaults}
+            data-tour="exercises-seed"
             disabled={saving}
             className="rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white active:opacity-80 disabled:opacity-40"
           >
@@ -202,7 +209,7 @@ export default function ExercisesPage() {
         </div>
       ) : (
         grouped.map(({ group, items }) => (
-          <section key={group} className="mb-4">
+          <section key={group} data-tour="exercises-list" className="mb-4">
             <h2 className="mb-2 text-sm font-semibold text-gray-600">
               {group}
               <span className="ml-1 font-normal text-gray-400">

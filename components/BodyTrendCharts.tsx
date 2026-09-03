@@ -362,7 +362,12 @@ export default function BodyTrendCharts({
   return (
     <div>
       {/* 期間フィルタ: グラフの上に 1 行でまとめ、3 つのグラフすべてに効かせる */}
-      <div className="mb-3 flex gap-1" role="group" aria-label="表示期間">
+      <div
+        data-tour="body-range"
+        className="mb-3 flex gap-1"
+        role="group"
+        aria-label="表示期間"
+      >
         {TREND_RANGES.map((r) => (
           <button
             key={r.value}

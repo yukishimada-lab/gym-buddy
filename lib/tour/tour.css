@@ -1,0 +1,83 @@
+/*
+ * 使い方ガイド(driver.js)の見た目をアプリに合わせる。
+ *
+ * driver.js 本体の CSS は .driver-* だけに当たるのでアプリ側には影響しない。
+ * ここでも .driver-popover 配下だけを指定し、アプリの共通スタイルは触らない。
+ * このファイルは「?」を押したときにだけ読み込まれる(start.ts が動的 import される)。
+ */
+
+.driver-popover.gym-tour {
+  /* 画面の狭い iPhone でも吹き出しが左右にはみ出さないようにする */
+  min-width: 0;
+  max-width: min(20rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border-radius: 0.875rem;
+  /* アプリ本体と同じフォント(日本語がゴシックで出るように) */
+  font-family: inherit;
+  color: #1f2937;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
+}
+
+.driver-popover.gym-tour .driver-popover-title {
+  /* 右上の「スキップ」に文字が重ならないようにする */
+  padding-right: 4.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #111827;
+}
+
+.driver-popover.gym-tour .driver-popover-description {
+  margin-top: 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: #374151;
+}
+
+/* 閉じる(スキップ)は指で押せる大きさにして、文字でも意味が分かるようにする */
+.driver-popover.gym-tour .driver-popover-close-btn {
+  top: 0.5rem;
+  right: 0.5rem;
+  width: auto;
+  height: auto;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.driver-popover.gym-tour .driver-popover-footer {
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
+
+.driver-popover.gym-tour .driver-popover-progress-text {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: #6b7280;
+}
+
+.driver-popover.gym-tour .driver-popover-footer-btn {
+  padding: 0.5rem 0.875rem;
+  border-radius: 0.5rem;
+  border-color: #d1d5db;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.driver-popover.gym-tour .driver-popover-next-btn {
+  border-color: #2563eb;
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+.driver-popover.gym-tour .driver-popover-next-btn:hover,
+.driver-popover.gym-tour .driver-popover-next-btn:focus {
+  background-color: #1d4ed8;
+}
+
+.driver-popover.gym-tour .driver-popover-navigation-btns button + button {
+  margin-left: 0.5rem;
+}

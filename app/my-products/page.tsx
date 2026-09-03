@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import HelpButton from "@/components/HelpButton";
-import { compressImage } from "@/lib/image";
+import { compressImage, imageErrorMessage } from "@/lib/image";
+import { postJson } from "@/lib/apiClient";
 import {
   BASIS_OPTIONS,
   countUnit,
@@ -111,6 +112,8 @@ export default function MyProductsPage() {
 
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  // 失敗の理由は注記と分けて赤字で出す(何が起きたか分かるように)
+  const [scanError, setScanError] = useState<string | null>(null);
   const formRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
@@ -158,20 +161,22 @@ export default function MyProductsPage() {
   const scanLabel = async (file: File) => {
     setScanning(true);
     setScanNote(null);
+    setScanError(null);
     setError(null);
     try {
-      const { blob, base64 } = await compressImage(file, 1280);
+      // 成分表示の細かい文字を読ませたいので長辺 1500px を確保する。
+      // iPhone の HEIC もここで JPEG に変換される。
+      const { blob, base64, mimeType } = await compressImage(file, 1500);
 
-      const res = await fetch("/api/products/analyze-label", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64, mimeType: "image/jpeg" }),
-      });
-      const json = await res.json();
+      const res = await postJson<{
+        reading: NutritionLabelReading;
+        empty?: boolean;
+      }>("/api/products/analyze-label", { image: base64, mimeType });
       if (!res.ok) {
-        setScanNote(json.error ?? "読み取りに失敗しました。");
+        setScanError(res.message);
         return;
       }
+      const json = res.data;
       const reading: NutritionLabelReading = json.reading;
 
       // 写真も残しておく(失敗しても登録は続行できる)
@@ -208,8 +213,10 @@ export default function MyProductsPage() {
             .join(" ")
         );
       }
-    } catch {
-      setScanNote("写真の処理に失敗しました。別の写真でお試しください。");
+    } catch (e) {
+      // ここに来るのは主に画像の変換失敗(HEIC を扱えない・サイズ超過など)
+      console.error("成分表示の読み取りに失敗:", e);
+      setScanError(imageErrorMessage(e));
     } finally {
       setScanning(false);
     }
@@ -395,6 +402,11 @@ export default function MyProductsPage() {
           手入力で登録する
         </button>
 
+        {scanError && (
+          <p className="mt-2 rounded-lg bg-red-50 p-2 text-xs leading-relaxed text-red-600">
+            {scanError}
+          </p>
+        )}
         {scanNote && (
           <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs leading-relaxed text-emerald-700">
             {scanNote}

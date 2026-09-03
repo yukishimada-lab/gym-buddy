@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
-  GEMINI_MODEL,
   GEMINI_NOT_CONFIGURED_MESSAGE,
+  TEXT_TIMEOUT_MS,
+  describeGeminiError,
+  extractText,
+  failureBody,
+  generateContent,
   getGeminiClient,
 } from "@/lib/gemini";
 import {
@@ -16,6 +20,8 @@ import { loadGoalAnalysisInput } from "@/lib/bodyData";
 
 // アドバイス生成に数秒かかることがあるため上限を延長
 export const maxDuration = 60;
+
+const LABEL = "body-advice";
 
 const fmt = (v: number | null, unit = "", digits = 1) =>
   v == null ? "記録なし" : `${v.toFixed(digits)}${unit}`;
@@ -46,8 +52,9 @@ export async function POST() {
 
   const ai = getGeminiClient();
   if (!ai) {
+    console.error(`[gemini] ${LABEL} aborted: GEMINI_API_KEY is not set`);
     return NextResponse.json(
-      { error: GEMINI_NOT_CONFIGURED_MESSAGE },
+      { error: GEMINI_NOT_CONFIGURED_MESSAGE, code: "NOT_CONFIGURED" },
       { status: 503 }
     );
   }
@@ -124,28 +131,17 @@ export async function POST() {
   ].join("\n");
 
   try {
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const { response } = await generateContent(ai, {
+      label: LABEL,
+      timeoutMs: TEXT_TIMEOUT_MS,
       contents: prompt,
     });
 
-    const advice = (response.text ?? "").trim();
-    if (!advice) {
-      return NextResponse.json(
-        { error: "アドバイスを生成できませんでした。もう一度お試しください。" },
-        { status: 500 }
-      );
-    }
-
+    const advice = extractText(response, LABEL);
     return NextResponse.json({ advice, generatedAt: new Date().toISOString() });
   } catch (e) {
-    console.error("body advice failed:", e);
-    return NextResponse.json(
-      {
-        error:
-          "アドバイスの生成に失敗しました。時間をおいて再度お試しください。",
-      },
-      { status: 500 }
-    );
+    const failure = describeGeminiError(e);
+    console.error(`[gemini] ${LABEL} responding ${failure.status} ${failure.code}`);
+    return NextResponse.json(failureBody(failure), { status: failure.status });
   }
 }

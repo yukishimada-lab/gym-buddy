@@ -1,17 +1,24 @@
 import { NextResponse } from "next/server";
-import { Type } from "@google/genai";
+import { ThinkingLevel, Type } from "@google/genai";
 import { createClient } from "@/lib/supabase/server";
 import {
-  GEMINI_MODEL,
   GEMINI_NOT_CONFIGURED_MESSAGE,
+  IMAGE_TIMEOUT_MS,
+  describeGeminiError,
+  extractText,
+  failureBody,
+  generateContent,
   getGeminiClient,
   parseJsonFromText,
+  readImageRequest,
   toNonNegativeNumber,
 } from "@/lib/gemini";
 import type { MyProductBasis, NutritionLabelReading } from "@/lib/types";
 
 // 画像解析は数秒〜十数秒かかることがあるため上限を延長
 export const maxDuration = 60;
+
+const LABEL = "analyze-label";
 
 const BASIS_VALUES: MyProductBasis[] = ["per_100g", "per_serving", "per_piece"];
 
@@ -58,31 +65,23 @@ export async function POST(request: Request) {
 
   const ai = getGeminiClient();
   if (!ai) {
+    console.error(`[gemini] ${LABEL} aborted: GEMINI_API_KEY is not set`);
     return NextResponse.json(
-      { error: GEMINI_NOT_CONFIGURED_MESSAGE },
+      { error: GEMINI_NOT_CONFIGURED_MESSAGE, code: "NOT_CONFIGURED" },
       { status: 503 }
     );
   }
 
-  let image: string;
-  let mimeType: string;
   try {
-    const body = await request.json();
-    image = body.image;
-    mimeType = body.mimeType || "image/jpeg";
-    if (typeof image !== "string" || image.length === 0) {
-      throw new Error("image is required");
-    }
-  } catch {
-    return NextResponse.json(
-      { error: "画像データが不正です。もう一度お試しください。" },
-      { status: 400 }
+    const { image, mimeType } = await readImageRequest(request);
+    console.log(
+      `[gemini] ${LABEL} start mimeType=${mimeType} base64Length=${image.length}`
     );
-  }
 
-  try {
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const { response } = await generateContent(ai, {
+      label: LABEL,
+      timeoutMs: IMAGE_TIMEOUT_MS,
+      thinkingLevel: ThinkingLevel.LOW,
       contents: [
         {
           role: "user",
@@ -154,16 +153,18 @@ export async function POST(request: Request) {
       },
     });
 
-    const parsed = parseJsonFromText(response.text ?? "") as Record<
-      string,
-      unknown
-    > | null;
+    const text = extractText(response, LABEL);
+    const parsed = parseJsonFromText(text) as Record<string, unknown> | null;
 
-    if (!parsed || typeof parsed !== "object") {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.error(
+        `[gemini] ${LABEL} unexpected response shape: ${text.slice(0, 300)}`
+      );
       return NextResponse.json(
         {
           error:
-            "栄養成分表示を読み取れませんでした。表の部分が大きく写るように撮り直すか、手入力してください。",
+            "栄養成分表示を読み取れませんでした。表の部分が大きく写るように撮り直すか、手入力してください。(PARSE_FAILED)",
+          code: "PARSE_FAILED",
         },
         { status: 502 }
       );
@@ -189,15 +190,11 @@ export async function POST(request: Request) {
       reading.fat_g === 0 &&
       reading.carbs_g === 0;
 
+    console.log(`[gemini] ${LABEL} done empty=${empty} basis=${reading.basis}`);
     return NextResponse.json({ reading, empty });
   } catch (e) {
-    console.error("analyze-label failed:", e);
-    return NextResponse.json(
-      {
-        error:
-          "栄養成分表示の読み取りに失敗しました。時間をおいて再度お試しいただくか、手動で入力してください。",
-      },
-      { status: 500 }
-    );
+    const failure = describeGeminiError(e);
+    console.error(`[gemini] ${LABEL} responding ${failure.status} ${failure.code}`);
+    return NextResponse.json(failureBody(failure), { status: failure.status });
   }
 }

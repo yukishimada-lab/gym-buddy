@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { postJson } from "@/lib/apiClient";
 import { loadGoalAnalysisInput } from "@/lib/bodyData";
 import {
   GOAL_MODE_LABEL,
@@ -201,14 +202,14 @@ export default function BodyGoalPage() {
     setGenerating(true);
     setAdviceNote(null);
     try {
-      const res = await fetch("/api/body/advice", { method: "POST" });
-      const json = await res.json();
+      const res = await postJson<{ advice: string }>("/api/body/advice", {});
       if (!res.ok) {
-        setAdviceNote(json.error ?? "アドバイスの生成に失敗しました。");
+        setAdviceNote(res.message);
         return;
       }
-      setAdvice(json.advice as string);
-    } catch {
+      setAdvice(res.data.advice);
+    } catch (e) {
+      console.error("アドバイスの生成に失敗:", e);
       setAdviceNote("アドバイスの生成に失敗しました。時間をおいてお試しください。");
     } finally {
       setGenerating(false);

@@ -27,7 +27,8 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import HelpButton from "@/components/HelpButton";
-import { compressImage } from "@/lib/image";
+import { compressImage, imageErrorMessage } from "@/lib/image";
+import { postJson } from "@/lib/apiClient";
 import {
   type AmountMode,
   basisLabel,
@@ -211,12 +212,15 @@ function MealsPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [photoNote, setPhotoNote] = useState<string | null>(null);
+  // 失敗の理由は注記と分けて赤字で出す(何が起きたか分かるように)
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   // 外食検索
   const [restaurant, setRestaurant] = useState("");
   const [menu, setMenu] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchNote, setSearchNote] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // 既存記録の編集
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -498,22 +502,22 @@ function MealsPage() {
   const analyzePhoto = async (file: File) => {
     setAnalyzing(true);
     setPhotoNote(null);
+    setPhotoError(null);
     setError(null);
     try {
-      const { blob, base64 } = await compressImage(file);
+      // iPhone の HEIC もここで JPEG になる(長辺 1500px まで縮小)
+      const { blob, base64, mimeType } = await compressImage(file);
 
       // 解析(サーバー側 API 経由で Gemini を呼ぶ)
-      const res = await fetch("/api/meals/analyze-photo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64, mimeType: "image/jpeg" }),
-      });
-      const json = await res.json();
+      const res = await postJson<{ items?: EstimatedFoodItem[] }>(
+        "/api/meals/analyze-photo",
+        { image: base64, mimeType }
+      );
       if (!res.ok) {
-        setPhotoNote(json.error ?? "写真の解析に失敗しました。");
+        setPhotoError(res.message);
         return;
       }
-      const items: EstimatedFoodItem[] = json.items ?? [];
+      const items: EstimatedFoodItem[] = res.data.items ?? [];
       if (items.length === 0) {
         setPhotoNote(
           "写真から食品を認識できませんでした。手動で入力してください。"
@@ -550,8 +554,10 @@ function MealsPage() {
           setPhotoPath(path);
         }
       }
-    } catch {
-      setPhotoNote("写真の処理に失敗しました。別の写真でお試しください。");
+    } catch (e) {
+      // ここに来るのは主に画像の変換失敗(HEIC を扱えない・サイズ超過など)
+      console.error("写真の処理に失敗:", e);
+      setPhotoError(imageErrorMessage(e));
     } finally {
       setAnalyzing(false);
     }
@@ -563,18 +569,19 @@ function MealsPage() {
     if (!restaurant.trim() || !menu.trim()) return;
     setSearching(true);
     setSearchNote(null);
+    setSearchError(null);
     setError(null);
     try {
-      const res = await fetch("/api/meals/restaurant-search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restaurant, menu }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setSearchNote(json.error ?? "検索に失敗しました。");
+      const result = await postJson<{
+        found?: boolean;
+        item?: EstimatedFoodItem;
+        note?: string | null;
+      }>("/api/meals/restaurant-search", { restaurant, menu });
+      if (!result.ok) {
+        setSearchError(result.message);
         return;
       }
+      const json = result.data;
       if (!json.found || !json.item) {
         setSearchNote(
           `栄養情報が見つかりませんでした。${
@@ -583,7 +590,8 @@ function MealsPage() {
         );
         return;
       }
-      setDrafts((prev) => [...prev, estimateToDraft(json.item)]);
+      const item = json.item;
+      setDrafts((prev) => [...prev, estimateToDraft(item)]);
       setSearchNote(
         `栄養情報を取得しました。内容を確認・修正してから記録してください。${
           json.note ? `(${json.note})` : ""
@@ -591,8 +599,11 @@ function MealsPage() {
       );
       setRestaurant("");
       setMenu("");
-    } catch {
-      setSearchNote("検索に失敗しました。時間をおいてお試しください。");
+    } catch (e) {
+      console.error("外食メニューの検索に失敗:", e);
+      setSearchError(
+        "検索に失敗しました。時間をおいて、もう一度お試しください。"
+      );
     } finally {
       setSearching(false);
     }
@@ -1049,6 +1060,11 @@ function MealsPage() {
                 写真を解析しています...(数秒かかります)
               </p>
             )}
+            {photoError && (
+              <p className="mt-2 rounded-lg bg-red-50 p-2 text-xs leading-relaxed text-red-600">
+                {photoError}
+              </p>
+            )}
             {photoNote && (
               <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-700">
                 {photoNote}
@@ -1084,6 +1100,11 @@ function MealsPage() {
             >
               {searching ? "検索中...(数秒かかります)" : "栄養情報を検索"}
             </button>
+            {searchError && (
+              <p className="mt-2 rounded-lg bg-red-50 p-2 text-xs leading-relaxed text-red-600">
+                {searchError}
+              </p>
+            )}
             {searchNote && (
               <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-700">
                 {searchNote}

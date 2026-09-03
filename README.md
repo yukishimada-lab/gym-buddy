@@ -403,6 +403,32 @@ GEMINI_API_KEY=AIza...
 
 > **キーを設定しなくても**アプリ自体は動作します(ビルドも通ります)。写真解析・外食検索を使ったときに「Gemini API キーが設定されていません」というメッセージが表示されるだけで、食品マスタからの記録・手動入力は問題なく使えます。
 
+#### 使用するモデルと、提供終了(deprecation)への備え
+
+Gemini のモデルには**提供終了日**があり、期限を過ぎたモデル名を指定すると API が 404 を返して AI 機能が**すべて**動かなくなります(実際に `gemini-2.0-flash` が 2026-06-01 に提供終了となり、写真解析・成分表示の読み取り・外食検索・アドバイス生成が一斉に失敗していました)。
+
+そのため `lib/gemini.ts` では、モデルを 1 つに固定せず候補を順に試すようにしています。
+
+| 優先順位 | モデル |
+| --- | --- |
+| 1 | `gemini-3.6-flash` |
+| 2 | `gemini-3.5-flash` |
+| 3 | `gemini-2.5-flash` |
+
+先頭のモデルが 404(提供終了)や 429(無料枠のレート制限)を返した場合は、自動的に次の候補を試します。特定のモデルに固定したいときは環境変数 `GEMINI_MODEL` を設定してください(設定するとその 1 つだけを使います)。
+
+#### AI が動かないときの自己診断
+
+ログインした状態で **`/api/gemini/health`** をブラウザで開くと、原因が JSON で返ります。
+
+- `ok: true` … キーもモデルも正常(`usedModel` に実際に使われたモデル名)
+- `code: "NOT_CONFIGURED"` … `GEMINI_API_KEY` が未設定
+- `code: "API_KEY_INVALID"` … キーが間違っている
+- `code: "MODEL_UNAVAILABLE"` … モデルがすべて提供終了。`availableModels` に**そのキーで今使えるモデル一覧**が入るので、そこから選んで `lib/gemini.ts` の `GEMINI_MODELS` を更新してください
+- `code: "RATE_LIMITED"` … 無料枠の上限。時間をおけば回復します
+
+Vercel のログには `[gemini]` で始まる行が出ます(`[gemini] analyze-photo ok model=... 1234ms` / `[gemini] analyze-photo failed model=... code=...`)。**Vercel → Deployments → Logs** で `gemini` を検索すると失敗理由が追えます。
+
 ---
 
 ## Phase 3(体重・InBody・目標サポート)のセットアップ

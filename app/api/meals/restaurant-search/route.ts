@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
-  GEMINI_MODEL,
   GEMINI_NOT_CONFIGURED_MESSAGE,
+  TEXT_TIMEOUT_MS,
+  describeGeminiError,
+  extractText,
+  failureBody,
+  generateContent,
   getGeminiClient,
   parseJsonFromText,
   toNonNegativeNumber,
@@ -10,6 +14,8 @@ import {
 
 // Google 検索グラウンディングは時間がかかることがあるため上限を延長
 export const maxDuration = 60;
+
+const LABEL = "restaurant-search";
 
 /**
  * POST /api/meals/restaurant-search
@@ -32,8 +38,9 @@ export async function POST(request: Request) {
 
   const ai = getGeminiClient();
   if (!ai) {
+    console.error(`[gemini] ${LABEL} aborted: GEMINI_API_KEY is not set`);
     return NextResponse.json(
-      { error: GEMINI_NOT_CONFIGURED_MESSAGE },
+      { error: GEMINI_NOT_CONFIGURED_MESSAGE, code: "NOT_CONFIGURED" },
       { status: 503 }
     );
   }
@@ -70,8 +77,9 @@ export async function POST(request: Request) {
       "栄養情報がまったく見つからない場合は found を false にし、数値は 0 にしてください。",
     ].join("\n");
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const { response } = await generateContent(ai, {
+      label: LABEL,
+      timeoutMs: TEXT_TIMEOUT_MS,
       contents: prompt,
       config: {
         // Google 検索グラウンディング(JSON モードとは併用不可のためプロンプトで JSON を指示)
@@ -79,10 +87,13 @@ export async function POST(request: Request) {
       },
     });
 
-    const parsed = parseJsonFromText(response.text ?? "") as Record<
-      string,
-      unknown
-    > | null;
+    const text = extractText(response, LABEL);
+    const parsed = parseJsonFromText(text) as Record<string, unknown> | null;
+    if (!parsed) {
+      console.error(
+        `[gemini] ${LABEL} unexpected response shape: ${text.slice(0, 300)}`
+      );
+    }
 
     if (!parsed || parsed.found !== true) {
       return NextResponse.json({
@@ -110,13 +121,8 @@ export async function POST(request: Request) {
       note: typeof parsed.note === "string" ? parsed.note.slice(0, 300) : null,
     });
   } catch (e) {
-    console.error("restaurant-search failed:", e);
-    return NextResponse.json(
-      {
-        error:
-          "栄養情報の検索に失敗しました。時間をおいて再度お試しいただくか、手動で入力してください。",
-      },
-      { status: 500 }
-    );
+    const failure = describeGeminiError(e);
+    console.error(`[gemini] ${LABEL} responding ${failure.status} ${failure.code}`);
+    return NextResponse.json(failureBody(failure), { status: failure.status });
   }
 }

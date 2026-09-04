@@ -43,10 +43,19 @@ export const SUPPORTED_IMAGE_MIME_TYPES = [
  */
 export const MAX_IMAGE_BASE64_LENGTH = 4_000_000;
 
-/** 画像つきリクエストの待ち時間の上限(ミリ秒)。Vercel の maxDuration より短くする。 */
+/**
+ * 画像つきリクエストの待ち時間の上限(ミリ秒)。Vercel の maxDuration より短くする。
+ * これは「モデルを 1 つ試すごと」ではなく generateContent の呼び出し全体の上限。
+ * モデルごとに数え直すと、フォールバックで 2 つ目・3 つ目を試している間に
+ * Vercel の実行時間(maxDuration)を超え、関数が強制終了されて
+ * JSON ですらないタイムアウト応答が返ってしまう。
+ */
 export const IMAGE_TIMEOUT_MS = 45_000;
-/** テキストのみのリクエストの待ち時間の上限(ミリ秒) */
+/** テキストのみのリクエストの待ち時間の上限(ミリ秒)。同じく呼び出し全体の上限。 */
 export const TEXT_TIMEOUT_MS = 40_000;
+
+/** 残り時間がこれを下回ったら、次のモデルを試さず打ち切る(中途半端な再試行を避ける) */
+const MIN_ATTEMPT_MS = 5_000;
 
 /** キー未設定なら null を返す(ビルド時・未設定環境でも壊れないように) */
 export function getGeminiClient(): GoogleGenAI | null {
@@ -104,6 +113,17 @@ function isModelUnavailable(e: unknown): boolean {
     msg.includes("is not found for api version") ||
     (msg.includes("not_found") && msg.includes("model"))
   );
+}
+
+/**
+ * リクエストの中身がモデルに受け付けられなかった(400 INVALID_ARGUMENT)エラーか。
+ * 新しい設定項目(thinkingConfig など)に対応していないモデルに当たったときに出る。
+ * モデルを変えれば通ることがあるので、これもフォールバックの対象にする。
+ */
+function isInvalidArgument(e: unknown): boolean {
+  const status = statusOf(e);
+  if (status === 400) return true;
+  return messageOf(e).toLowerCase().includes("invalid_argument");
 }
 
 function isAbort(e: unknown): boolean {
@@ -186,6 +206,15 @@ export function describeGeminiError(e: unknown): GeminiFailure {
       code: "UNSUPPORTED_IMAGE",
     };
   }
+  if (isInvalidArgument(e)) {
+    return {
+      status: 502,
+      message:
+        "AI がリクエストを受け付けませんでした(モデルの設定が合っていない可能性があります)。" +
+        "少し時間をおいてお試しください。直らない場合、管理者は /api/gemini/health で使えるモデルを確認してください。",
+      code: "INVALID_ARGUMENT",
+    };
+  }
   if (status === 503 || msg.includes("overloaded") || msg.includes("unavailable")) {
     return {
       status: 503,
@@ -229,22 +258,51 @@ type GenerateOptions = {
  * モデルのフォールバック・タイムアウト・失敗ログをまとめて面倒みる generateContent。
  * モデルが提供終了(404)なら次の候補を試すので、モデル入れ替えで全機能が
  * 止まる事故が起きない。
+ *
+ * 待ち時間(timeoutMs)は「呼び出し全体」の予算として扱い、モデルを試すたびに
+ * 残り時間を配り直す。こうしないとフォールバック中に Vercel の実行時間を超え、
+ * 「なぜ失敗したのか分からない 504」になってしまう。
  */
 export async function generateContent(
   ai: GoogleGenAI,
   options: GenerateOptions
 ): Promise<{ response: GenerateContentResponse; model: string }> {
   const timeoutMs = options.timeoutMs ?? TEXT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let lastError: unknown = null;
 
+  // 試す順番。thinkingLevel に対応していないモデルに当たると 400 で弾かれるため、
+  // そのモデルは thinkingConfig 抜きでもう一度だけ試せるようにしておく。
+  const attempts: { model: string; withThinking: boolean }[] = [];
   for (const model of GEMINI_MODELS) {
+    if (options.thinkingLevel && supportsThinkingLevel(model)) {
+      attempts.push({ model, withThinking: true });
+    }
+    attempts.push({ model, withThinking: false });
+  }
+
+  /** 見切りをつけたモデル(残りの試行を飛ばす) */
+  let skipModel: string | null = null;
+  /** 1 回でも実際に呼び出したか(残り時間の判定は 2 回目以降にだけ効かせる) */
+  let attempted = false;
+
+  for (const { model, withThinking } of attempts) {
+    if (model === skipModel) continue;
+    const remaining = deadline - Date.now();
+    if (attempted && remaining <= MIN_ATTEMPT_MS) {
+      console.error(
+        `[gemini] ${options.label} skipped model=${model} (残り時間が足りないため打ち切り)`
+      );
+      break;
+    }
     const startedAt = Date.now();
+    attempted = true;
     try {
       const config: GenerateContentConfig = {
         ...options.config,
-        abortSignal: AbortSignal.timeout(timeoutMs),
+        abortSignal: AbortSignal.timeout(Math.max(remaining, 1_000)),
       };
-      if (options.thinkingLevel && supportsThinkingLevel(model)) {
+      if (withThinking) {
         config.thinkingConfig = {
           ...config.thinkingConfig,
           thinkingLevel: options.thinkingLevel,
@@ -256,21 +314,27 @@ export async function generateContent(
         config,
       });
       console.log(
-        `[gemini] ${options.label} ok model=${model} ${Date.now() - startedAt}ms`
+        `[gemini] ${options.label} ok model=${model} thinking=${withThinking} ${Date.now() - startedAt}ms`
       );
       return { response, model };
     } catch (e) {
       lastError = e;
       const failure = describeGeminiError(e);
       console.error(
-        `[gemini] ${options.label} failed model=${model} ${Date.now() - startedAt}ms code=${failure.code}: ${messageOf(e)}`
+        `[gemini] ${options.label} failed model=${model} thinking=${withThinking} ${Date.now() - startedAt}ms code=${failure.code}: ${messageOf(e)}`
       );
+      // thinkingConfig が原因で弾かれた可能性があるので、まず外して同じモデルを試す
+      if (withThinking && isInvalidArgument(e)) continue;
       // 提供終了(404)のときは次の候補を試す。
       // 無料枠のレート制限はモデルごとにかかるため、429 も次の候補を試す。
+      // リクエスト自体を受け付けてもらえない(400)ときも、別のモデルなら通ることがある。
       // それ以外(キー不正など)はモデルを変えても直らないので即座に返す。
       const retryable =
-        isModelUnavailable(e) || failure.code === "RATE_LIMITED";
+        isModelUnavailable(e) ||
+        isInvalidArgument(e) ||
+        failure.code === "RATE_LIMITED";
       if (!retryable) throw new GeminiError(failure);
+      skipModel = model;
     }
   }
 

@@ -8,7 +8,8 @@ import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
 import HelpButton from "@/components/HelpButton";
-import { GripVertical, NotebookPen, StickyNote } from "lucide-react";
+import RestTimerBar, { useRestTimer } from "@/components/RestTimerBar";
+import { GripVertical, NotebookPen, StickyNote, Timer } from "lucide-react";
 import {
   formatDateLabel,
   formatShortDateLabel,
@@ -196,6 +197,9 @@ function RecordPage() {
    */
   const [justExpanded, setJustExpanded] = useState(false);
 
+  // セット間の休憩タイマー(状態とロジックはフック側に持たせている)
+  const timer = useRestTimer();
+
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
     const supabase = createClient();
@@ -288,8 +292,8 @@ function RecordPage() {
   // 「元に戻す」は数秒だけ出す(押さなければそのまま消える)
   useEffect(() => {
     if (!undoTarget) return;
-    const timer = setTimeout(() => setUndoTarget(null), UNDO_TIMEOUT_MS);
-    return () => clearTimeout(timer);
+    const timeoutId = setTimeout(() => setUndoTarget(null), UNDO_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
   }, [undoTarget]);
 
   const addLog = async (e: React.FormEvent) => {
@@ -299,6 +303,9 @@ function RecordPage() {
       setError("セットを 1 つ以上追加してください。");
       return;
     }
+    // 保存を待つ間に「操作の中」ではなくなるので、ここで音の許可だけ取っておく
+    timer.prepareAudio();
+    const addedExercise = exercises.find((ex) => ex.id === exerciseId) ?? null;
     setSaving(true);
     setError(null);
     const supabase = createClient();
@@ -341,6 +348,15 @@ function RecordPage() {
     } else {
       // 次の種目もだいたい同じセット構成なので、直前の入力を残しておく
       setExerciseId("");
+      // 記録した直後が休憩の始まり。過去の日付をまとめて入力しているときは邪魔なので、
+      // 今日の記録のときだけ自動で始める。
+      if (
+        timer.settings.autoStart &&
+        addedExercise &&
+        date === todayString()
+      ) {
+        timer.start(addedExercise.id, addedExercise.name);
+      }
     }
     await loadLogs(date);
     setSaving(false);
@@ -1021,6 +1037,17 @@ function RecordPage() {
                           <ExerciseHeading log={log} />
                         </div>
                         <div className="flex shrink-0 gap-1">
+                          {/* この種目の休憩を始める。長さは種目ごとに覚えている。 */}
+                          <button
+                            onClick={() =>
+                              timer.start(log.exercise_id, exerciseName(log))
+                            }
+                            aria-label={`${exerciseName(log)}の休憩タイマーを開始`}
+                            className="flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-2 text-sm font-semibold text-blue-700 active:bg-blue-100"
+                          >
+                            <Timer aria-hidden size={14} />
+                            休憩
+                          </button>
                           <button
                             onClick={() => startEdit(log)}
                             className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
@@ -1194,8 +1221,9 @@ function RecordPage() {
         )}
       </section>
 
-      {/* 固定した一括削除バー / スナックバーに隠れないよう、下に余白を足しておく */}
+      {/* 固定した一括削除バー / スナックバー / 休憩タイマーに隠れないよう、下に余白を足す */}
       {(selectMode || undoTarget) && <div className="h-24" aria-hidden />}
+      {timer.session && <div className="h-52" aria-hidden />}
 
       {/*
         一括削除バー(下部ナビの上に固定して、親指で押しやすい位置に置く)。
@@ -1226,6 +1254,9 @@ function RecordPage() {
           </div>
         </div>
       )}
+
+      {/* セット間の休憩タイマー(下部ナビの上に固定) */}
+      <RestTimerBar timer={timer} raised={selectMode || undoTarget != null} />
 
       {/* 削除の取り消し(数秒だけ出す) */}
       {undoTarget && (

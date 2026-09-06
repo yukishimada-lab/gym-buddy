@@ -49,26 +49,38 @@ const NOT_A_CHAT_MODEL =
 /**
  * モデル名に点数を付ける。大きいほど優先。使えないものは null。
  *
- * このアプリの用途(写真とテキストの短い解析)では、速くて安い flash 系が最適。
- * pro は精度は高いが遅くて高いので最後の手段にする。
+ * 【並べる順番の考え方】
+ * このアプリは Gemini の無料枠で動かしている。無料枠の上限はモデルごとに
+ * 決まっていて、pro 系は flash 系よりはるかに少ない(まったく無いこともある)。
+ * そのため「新しさ」より先に「flash かどうか」で並べる。
+ * 新しい pro を選んでしまうと、数回使っただけで RATE_LIMITED になる。
+ *
+ *   1. flash(速い・安い・無料枠が多い)
+ *   2. flash-lite(さらに軽い)
+ *   3. pro(精度は高いが無料枠が少なく遅い。最後の手段)
+ *
+ * 同じ種類の中では新しい世代を優先し、試験版(preview / exp)は後回しにする。
  */
 function scoreModel(name: string): number | null {
   if (!name.startsWith("gemini-")) return null;
   if (NOT_A_CHAT_MODEL.test(name)) return null;
 
+  // 種類の差は世代の差より大きく効かせる(新しい pro より古い flash を選ぶ)
+  let score: number;
+  if (/flash-lite/.test(name)) score = 20_000;
+  else if (/flash/.test(name)) score = 30_000;
+  else if (/pro/.test(name)) score = 10_000;
+  else score = 0;
+
   // gemini-2.5-flash → 2.5 / gemini-flash-latest → 版数なし
   const version = Number(/^gemini-(\d+(?:\.\d+)?)/.exec(name)?.[1] ?? NaN);
+  // 版数の無い別名(-latest)は「そこそこ新しい」扱いにする。
+  // 常に最新へ向け直されるので提供終了には強いが、
+  // 明示的に新しい版が並んでいればそちらを選ぶ。
+  score += Number.isFinite(version) ? version * 100 : 300;
 
-  let score = Number.isFinite(version) ? version * 100 : 250;
-
-  if (/flash-lite/.test(name)) score += 20;
-  else if (/flash/.test(name)) score += 30;
-  else if (/pro/.test(name)) score += 10;
-
-  // 試験版は不安定(仕様変更・打ち切りが多い)ので後回し
-  if (/preview|-exp|experimental|-rc/.test(name)) score -= 60;
-  // 常に最新に向け直される別名は、提供終了に強いので少し加点
-  if (/-latest$/.test(name)) score += 15;
+  // 試験版は不安定(仕様変更・打ち切りが多い)ので、同じ種類の中では後ろに回す
+  if (/preview|-exp|experimental|-rc/.test(name)) score -= 5_000;
 
   return score;
 }

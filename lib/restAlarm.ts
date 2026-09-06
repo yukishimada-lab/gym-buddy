@@ -118,6 +118,21 @@ function writeWavHeader(view: DataView, dataLength: number): void {
 }
 
 /**
+ * ほぼ長さゼロの無音 WAV。
+ *
+ * iOS は「ユーザーの操作の中で一度でも再生した音声要素」でないと、
+ * あとからプログラムで鳴らすことを許さない。そこで最初のタップのときに
+ * これを鳴らして、音声要素の再生許可だけ先に取っておく。
+ */
+export function renderSilentWav(seconds = 0.05): Uint8Array {
+  const sampleCount = Math.max(1, Math.ceil(seconds * SAMPLE_RATE));
+  const buffer = new ArrayBuffer(44 + sampleCount);
+  writeWavHeader(new DataView(buffer), sampleCount);
+  new Uint8Array(buffer, 44, sampleCount).fill(SILENCE);
+  return new Uint8Array(buffer);
+}
+
+/**
  * 休憩の長さから WAV データを作る。
  * 先頭はほぼ無音で、予告音と終了音だけが入っている。
  */

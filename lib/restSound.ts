@@ -25,6 +25,7 @@ import {
   MAX_SCHEDULED_SECONDS,
   alarmTotalSeconds,
   renderAlarmWav,
+  renderSilentWav,
 } from "./restAlarm";
 
 type AudioContextCtor = typeof AudioContext;
@@ -50,6 +51,9 @@ export function isAudioSupported(): boolean {
  * 鳴らせる見込みなら true。
  */
 export function unlockAudio(): boolean {
+  // 予約再生に使う音声要素の許可も、この操作のうちに取っておく
+  // (あとから取ろうとしても、操作の外だと端末に断られる)
+  primeAudioElement();
   const Ctor = getCtor();
   if (!Ctor) return false;
   try {
@@ -142,10 +146,60 @@ export function vibrate(pattern: number | number[]): void {
 // 予約再生(画面ロック中でも鳴らす)
 // ------------------------------------------------------------
 
-/** 再生中の音声。null なら予約再生していない。 */
+/**
+ * 鳴らすための音声要素。**使い回す**のが重要。
+ *
+ * iOS は「ユーザーの操作の中で一度でも再生した音声要素」でないと、
+ * あとからプログラムで鳴らすことを許さない。
+ * 記録を保存してから自動で休憩を始める場合、保存の通信を待つあいだに
+ * 「操作の中」を抜けてしまうため、そこで新しく音声要素を作ると鳴らせない。
+ * 最初のタップで一度だけ無音を鳴らして許可を取り、以後はこの要素を
+ * 使い回すことで、あとからでも確実に鳴らせるようにしている。
+ */
 let alarmAudio: HTMLAudioElement | null = null;
-/** 音声データの一時 URL。使い終わったら必ず開放する(放っておくとメモリに残る) */
+/** 再生中の音声データの URL。使い終わったら必ず開放する */
 let alarmUrl: string | null = null;
+/** いま休憩の音声を仕掛けているか */
+let alarmArmed = false;
+
+function toWavUrl(wav: Uint8Array): string {
+  return URL.createObjectURL(
+    new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" })
+  );
+}
+
+function releaseAlarmUrl(): void {
+  if (!alarmUrl) return;
+  try {
+    URL.revokeObjectURL(alarmUrl);
+  } catch {
+    // 開放できなくても実害はない
+  }
+  alarmUrl = null;
+}
+
+/**
+ * 音声要素の再生許可を取っておく。**必ずタップ等の操作の中から呼ぶこと。**
+ * 無音を一瞬鳴らすだけなので、ユーザーには何も聞こえない。
+ */
+function primeAudioElement(): void {
+  if (alarmAudio || typeof window === "undefined" || !window.Audio) return;
+  try {
+    const audio = new Audio(toWavUrl(renderSilentWav()));
+    audio.preload = "auto";
+    // 許可を取るためだけの再生なので、聞こえないようにしておく
+    audio.volume = 0;
+    void audio
+      .play()
+      .then(() => audio.pause())
+      .catch(() => {
+        // 断られてもタイマー自体は動く(その場で鳴らす方式に任せる)
+      });
+    alarmAudio = audio;
+  } catch {
+    alarmAudio = null;
+  }
+}
 
 /**
  * iOS の「音の扱い方」を指定する(Safari 16.4 以降)。
@@ -210,35 +264,25 @@ function clearLockScreenInfo(): void {
   }
 }
 
-/** 予約再生を止めて後片付けする */
+/**
+ * 予約再生を止める。
+ * 音声要素そのものは再生許可を保つために残し、中身だけ捨てる。
+ */
 export function stopScheduledAlarm(): void {
-  const audio = alarmAudio;
-  const url = alarmUrl;
-  alarmAudio = null;
-  alarmUrl = null;
+  alarmArmed = false;
   try {
-    if (audio) {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-    }
+    alarmAudio?.pause();
   } catch {
     // 片付けの失敗は無視してよい
   }
-  if (url) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // 同上
-    }
-  }
+  releaseAlarmUrl();
   setAudioSessionType("auto");
   clearLockScreenInfo();
 }
 
 /** 予約再生が動いているか(動いていれば、時間になっても別途鳴らす必要はない) */
 export function isScheduledAlarmActive(): boolean {
-  return alarmAudio != null && !alarmAudio.ended;
+  return alarmArmed && alarmAudio != null && !alarmAudio.ended;
 }
 
 /** この長さの休憩を予約再生でまかなえるか */
@@ -253,7 +297,9 @@ export function canScheduleAlarm(remainingSeconds: number): boolean {
 
 /**
  * 「残り remainingSeconds 秒後に鳴る音声」を今から再生する。
- * **必ずタップ等の操作の中から呼ぶこと**(操作なしの再生は端末に拒否される)。
+ *
+ * 最初のタップで unlockAudio() を通していれば、非同期処理をはさんだあと
+ * (記録を保存したあとの自動開始など)でも鳴らせる。
  *
  * @returns 再生を始められたら true
  */
@@ -264,20 +310,22 @@ export function startScheduledAlarm(
   stopScheduledAlarm();
   if (!canScheduleAlarm(remainingSeconds)) return false;
 
-  try {
-    const wav = renderAlarmWav(remainingSeconds);
-    const blob = new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.preload = "auto";
+  // まだ許可を取っていなければここで取る(操作の中から呼ばれていれば通る)
+  primeAudioElement();
+  const audio = alarmAudio;
+  if (!audio) return false;
 
-    alarmAudio = audio;
-    alarmUrl = url;
+  try {
+    alarmUrl = toWavUrl(renderAlarmWav(remainingSeconds));
+    audio.src = alarmUrl;
+    audio.volume = 1;
+    audio.currentTime = 0;
+    alarmArmed = true;
 
     // 画面を消しても鳴らしたいので、音楽アプリと同じ扱いにしてもらう
     setAudioSessionType("playback");
 
-    audio.addEventListener("ended", () => stopScheduledAlarm(), { once: true });
+    audio.onended = () => stopScheduledAlarm();
 
     void audio.play().catch(() => {
       // 端末に再生を断られた場合は、その場で鳴らす方式に任せる

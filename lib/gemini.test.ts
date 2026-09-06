@@ -29,6 +29,21 @@ describe("rankModels", () => {
     expect(models[0]).toBe("gemini-2.5-flash");
   });
 
+  it("新しい pro より、古くても flash を選ぶ(無料枠が pro は極端に少ないため)", () => {
+    const models = rankModels([
+      { name: "models/gemini-4.0-pro" },
+      { name: "models/gemini-2.5-flash" },
+    ]);
+    expect(models[0]).toBe("gemini-2.5-flash");
+  });
+
+  it("flash が無ければ flash-lite、それも無ければ pro を使う", () => {
+    expect(
+      rankModels([{ name: "models/gemini-4.0-pro" }, { name: "models/gemini-2.5-flash-lite" }])[0]
+    ).toBe("gemini-2.5-flash-lite");
+    expect(rankModels([{ name: "models/gemini-4.0-pro" }])[0]).toBe("gemini-4.0-pro");
+  });
+
   it("新しい世代を優先する", () => {
     const models = rankModels([
       { name: "models/gemini-2.0-flash" },
@@ -44,6 +59,17 @@ describe("rankModels", () => {
       { name: "models/gemini-2.5-flash" },
     ]);
     expect(models[0]).toBe("gemini-2.5-flash");
+  });
+
+  it("版数の無い別名(-latest)は、より新しい版があればそちらに譲る", () => {
+    const models = rankModels([
+      { name: "models/gemini-flash-latest" },
+      { name: "models/gemini-4.0-flash" },
+      { name: "models/gemini-2.0-flash" },
+    ]);
+    expect(models[0]).toBe("gemini-4.0-flash");
+    // 古い版よりは別名を優先する(別名は常に最新へ向け直されるため)
+    expect(models[1]).toBe("gemini-flash-latest");
   });
 
   it("generateContent に対応していないモデルは選ばない", () => {

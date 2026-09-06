@@ -116,6 +116,33 @@ function MemoLine({ memo }: { memo: string }) {
   );
 }
 
+/**
+ * その種目の休憩を始めるボタン。長さは種目ごとに覚えている。
+ *
+ * 編集中にも出す。セットを 1 つこなすたびに
+ * 「編集 → 数値を入れる → 保存 → 休憩」と押すのは手数が多く、
+ * ジムでは休憩を先に始めたいことのほうが多いため。
+ */
+function RestButton({
+  log,
+  onStart,
+}: {
+  log: WorkoutLogWithExercise;
+  onStart: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onStart}
+      aria-label={`${exerciseName(log)}の休憩タイマーを開始`}
+      className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-2 text-sm font-semibold text-blue-700 active:bg-blue-100"
+    >
+      <Timer aria-hidden size={14} />
+      休憩
+    </button>
+  );
+}
+
 /** セットの一覧(「1set 80kg × 10回」)。通常表示と選択モードで共通に使う */
 function SetLines({ sets }: { sets: WorkoutSet[] }) {
   if (sets.length === 0) {
@@ -188,15 +215,6 @@ function RecordPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
   const [undoTarget, setUndoTarget] = useState<DeletedSnapshot | null>(null);
-
-  /**
-   * 「この日の種目をすべて削除」の案内を出すかどうか。
-   *
-   * 本来はルーティンを間違えて展開した直後に使うものなので、常時出さずに
-   * 展開した直後だけ出す。× で閉じる・日付を変える・画面に入り直すと消える。
-   * (閉じたあとは「選択して削除」→「すべて選択」で同じことができる)
-   */
-  const [justExpanded, setJustExpanded] = useState(false);
 
   // セット間の休憩タイマー(状態とロジックはフック側に持たせている)
   // タイマー本体は AppShell が持っている(タブを移動しても止まらないように)
@@ -295,7 +313,6 @@ function RecordPage() {
       setSelectMode(false);
       setSelectedIds([]);
       setUndoTarget(null);
-      setJustExpanded(false);
       await loadLogs(date);
     })();
   }, [date, loadLogs]);
@@ -386,6 +403,16 @@ function RecordPage() {
       setError("セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。");
       return;
     }
+    // 保存の通信を待つあいだに「タップ操作の中」を抜けてしまうので、
+    // 音を鳴らす許可はここ(タップの中)で取っておく
+    timer.prepareAudio();
+
+    // セットが増えた = 1 セットこなした直後、とみなして休憩に入る。
+    // 数値の打ち直しなど、セット数が変わらない編集では始めない。
+    const target = logs.find((log) => log.id === editId) ?? null;
+    const addedSet =
+      target != null && editSets.length > (target.workout_sets?.length ?? 0);
+
     setSaving(true);
     setError(null);
     const supabase = createClient();
@@ -407,6 +434,9 @@ function RecordPage() {
       setError(`更新に失敗しました: ${insError.message}`);
     } else {
       setEditId(null);
+      if (addedSet && target && timer.settings.autoStart) {
+        timer.start(target.exercise_id, exerciseName(target));
+      }
     }
     await loadLogs(date);
     setSaving(false);
@@ -497,7 +527,6 @@ function RecordPage() {
     setSelectedIds([]);
     setSelectMode(false);
     setUndoTarget({ logs: targets });
-    setJustExpanded(false);
     await loadLogs(date);
     setDeleting(false);
   };
@@ -527,7 +556,6 @@ function RecordPage() {
   const deleteSelected = () =>
     confirmAndDelete(logs.filter((l) => selectedIds.includes(l.id)));
 
-  const deleteAllOfDay = () => confirmAndDelete(logs);
 
   /**
    * 直前の一括削除を元に戻す。
@@ -790,8 +818,6 @@ function RecordPage() {
       setError(`セットの展開に失敗しました: ${setInsertError.message}`);
     } else {
       setRoutineId("");
-      // 展開直後だけ「まとめて削除」の案内を出す
-      setJustExpanded(true);
     }
     await loadLogs(date);
     setApplying(false);
@@ -880,30 +906,6 @@ function RecordPage() {
             </button>
           </div>
 
-          {/*
-            間違ったルーティンを展開した直後にすぐ戻せるようにする。
-            常時出すと邪魔なので、展開した直後だけ出して × で閉じられるようにする。
-          */}
-          {justExpanded && logs.length > 0 && (
-            <div className="mt-2 flex items-stretch gap-1 rounded-lg border border-red-200 bg-red-50">
-              <button
-                type="button"
-                onClick={deleteAllOfDay}
-                disabled={deleting}
-                className="min-w-0 flex-1 rounded-l-lg px-3 py-3 text-left text-sm font-semibold text-red-600 active:bg-red-100 disabled:opacity-40"
-              >
-                間違えて展開した? この日の種目をすべて削除({logs.length}件)
-              </button>
-              <button
-                type="button"
-                onClick={() => setJustExpanded(false)}
-                aria-label="この案内を閉じる"
-                className="flex w-12 shrink-0 items-center justify-center rounded-r-lg text-xl leading-none text-red-400 active:bg-red-100"
-              >
-                ×
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -1018,7 +1020,17 @@ function RecordPage() {
                 >
                   {isEditing ? (
                     <div>
-                      <p className="mb-2 font-semibold">{exerciseName(log)}</p>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-1 items-center gap-1">
+                          <ExerciseHeading log={log} />
+                        </div>
+                        <RestButton
+                          log={log}
+                          onStart={() =>
+                            timer.start(log.exercise_id, exerciseName(log))
+                          }
+                        />
+                      </div>
                       <SetInputList
                         sets={editSets}
                         onChange={setEditSets}
@@ -1048,17 +1060,12 @@ function RecordPage() {
                           <ExerciseHeading log={log} />
                         </div>
                         <div className="flex shrink-0 gap-1">
-                          {/* この種目の休憩を始める。長さは種目ごとに覚えている。 */}
-                          <button
-                            onClick={() =>
+                          <RestButton
+                            log={log}
+                            onStart={() =>
                               timer.start(log.exercise_id, exerciseName(log))
                             }
-                            aria-label={`${exerciseName(log)}の休憩タイマーを開始`}
-                            className="flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-2 text-sm font-semibold text-blue-700 active:bg-blue-100"
-                          >
-                            <Timer aria-hidden size={14} />
-                            休憩
-                          </button>
+                          />
                           <button
                             onClick={() => startEdit(log)}
                             className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"

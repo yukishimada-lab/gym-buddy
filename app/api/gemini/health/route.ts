@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
-  GEMINI_MODELS,
   GEMINI_NOT_CONFIGURED_MESSAGE,
   describeGeminiError,
   extractText,
   generateContent,
   getGeminiClient,
+  resolveModels,
 } from "@/lib/gemini";
 
 export const maxDuration = 60;
@@ -39,7 +39,6 @@ export async function GET() {
         ok: false,
         summary: GEMINI_NOT_CONFIGURED_MESSAGE,
         code: "NOT_CONFIGURED",
-        configuredModels: GEMINI_MODELS,
       },
       { status: 503 }
     );
@@ -62,6 +61,9 @@ export async function GET() {
     console.error(`[gemini] ${LABEL} models.list failed: ${listError}`);
   }
 
+  // 自動検出で「今回使うモデル」に選ばれたもの(先頭から順に試される)
+  const selectedModels = await resolveModels(ai);
+
   // 実際に 1 回だけ生成してみる(ここが通れば本番の解析も通る)
   const startedAt = Date.now();
   try {
@@ -77,7 +79,7 @@ export async function GET() {
       usedModel: model,
       latencyMs: Date.now() - startedAt,
       reply: text.slice(0, 50),
-      configuredModels: GEMINI_MODELS,
+      selectedModels,
       availableModels,
       listError,
     });
@@ -90,7 +92,7 @@ export async function GET() {
         summary: failure.message,
         code: failure.code,
         latencyMs: Date.now() - startedAt,
-        configuredModels: GEMINI_MODELS,
+        selectedModels,
         availableModels,
         listError,
       },

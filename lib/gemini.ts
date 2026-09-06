@@ -8,21 +8,139 @@ import type { GenerateContentConfig, GenerateContentResponse } from "@google/gen
  *
  * 【モデル名について】
  * Gemini のモデルには提供終了(shutdown)日があり、期限を過ぎたモデル名を
- * 指定すると API は 404「no longer available」を返す。以前使っていた
- * gemini-2.0-flash は 2026-06-01 に提供終了しており、これが原因で
- * 写真解析などの機能がすべて失敗していた。
- * 同じことが再発しても止まらないよう、下の配列を順に試すようにしている。
+ * 指定すると API は 404「no longer available」を返す。
+ * かつてはコードにモデル名を直書きしていたが、候補として並べた 3 つが
+ * 同時に提供終了して AI 機能が全滅した(2026 年 9 月)。
+ * そのため今は models.list() で「このキーで今使えるモデル」を取得し、
+ * その中から選ぶようにしている(resolveModels)。
+ * モデルが入れ替わってもコードの修正なしで追従できる。
  */
 
-/** 優先順に試すモデル。先頭から順に、404(提供終了)なら次を試す。 */
-export const GEMINI_MODELS: string[] = (
-  process.env.GEMINI_MODEL?.trim()
-    ? [process.env.GEMINI_MODEL.trim()]
-    : ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
-);
+/**
+ * 環境変数で使うモデルを固定したいときの指定(任意)。
+ * 設定されていればこれだけを使い、自動検出は行わない。
+ */
+const PINNED_MODEL = process.env.GEMINI_MODEL?.trim() || null;
 
-/** 表示・ログ用の代表モデル名 */
-export const GEMINI_MODEL = GEMINI_MODELS[0];
+/**
+ * モデル一覧を取得できなかったときに試す候補。
+ * 実在しないモデルは 404 で次に進むだけなので、多めに並べておく。
+ * "-latest" はモデルが入れ替わっても Google 側で新しい版に向け直される別名。
+ */
+const FALLBACK_MODELS = [
+  "gemini-flash-latest",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+
+/** 実際に試したモデル名(エラーメッセージに出すため覚えておく) */
+let lastTriedModels: string[] = PINNED_MODEL ? [PINNED_MODEL] : FALLBACK_MODELS;
+
+/** 自動検出の結果のキャッシュ(毎リクエスト models.list() を叩かないため) */
+let modelCache: { models: string[]; expiresAt: number } | null = null;
+
+/** キャッシュの有効期間。長すぎると提供終了に気付くのが遅れる */
+const MODEL_CACHE_MS = 30 * 60 * 1000;
+
+/** 文章生成に使えない(画像生成・埋め込み・音声など)モデルを弾く */
+const NOT_A_CHAT_MODEL =
+  /embedding|aqa|imagen|veo|tts|audio|image|learnlm|gemma|robotics|computer-use|guard/i;
+
+/**
+ * モデル名に点数を付ける。大きいほど優先。使えないものは null。
+ *
+ * このアプリの用途(写真とテキストの短い解析)では、速くて安い flash 系が最適。
+ * pro は精度は高いが遅くて高いので最後の手段にする。
+ */
+function scoreModel(name: string): number | null {
+  if (!name.startsWith("gemini-")) return null;
+  if (NOT_A_CHAT_MODEL.test(name)) return null;
+
+  // gemini-2.5-flash → 2.5 / gemini-flash-latest → 版数なし
+  const version = Number(/^gemini-(\d+(?:\.\d+)?)/.exec(name)?.[1] ?? NaN);
+
+  let score = Number.isFinite(version) ? version * 100 : 250;
+
+  if (/flash-lite/.test(name)) score += 20;
+  else if (/flash/.test(name)) score += 30;
+  else if (/pro/.test(name)) score += 10;
+
+  // 試験版は不安定(仕様変更・打ち切りが多い)ので後回し
+  if (/preview|-exp|experimental|-rc/.test(name)) score -= 60;
+  // 常に最新に向け直される別名は、提供終了に強いので少し加点
+  if (/-latest$/.test(name)) score += 15;
+
+  return score;
+}
+
+/** models.list() が返す情報のうち、選定に使う部分 */
+export type ModelCandidate = { name: string; supportedActions?: string[] };
+
+/**
+ * モデル候補を「使いたい順」に並べ替えて上位を返す。
+ * ネットワークに触れない純粋関数なのでテストできる(lib/__tests__/gemini.test.ts)。
+ */
+export function rankModels(candidates: ModelCandidate[], limit = 3): string[] {
+  const scored: { name: string; score: number }[] = [];
+  for (const candidate of candidates) {
+    const name = (candidate.name ?? "").replace(/^models\//, "");
+    if (!name) continue;
+    // generateContent に対応していないモデルは除く
+    // (supportedActions が空のこともあるので、その場合は名前で判断する)
+    const actions = candidate.supportedActions;
+    if (actions?.length && !actions.includes("generateContent")) continue;
+    const score = scoreModel(name);
+    if (score != null) scored.push({ name, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((m) => m.name);
+}
+
+/**
+ * このキーで実際に使えるモデルを Google に問い合わせて、良さそうな順に返す。
+ *
+ * モデル名をコードに直書きすると、提供終了(404)のたびに全機能が止まる。
+ * 実際に 2026 年 9 月、直書きしていた 3 つのモデルが同時に使えなくなり
+ * 外食検索などが全滅した。一覧から選べば、モデルが入れ替わっても追従できる。
+ */
+export async function resolveModels(ai: GoogleGenAI): Promise<string[]> {
+  if (PINNED_MODEL) return [PINNED_MODEL];
+
+  if (modelCache && modelCache.expiresAt > Date.now()) return modelCache.models;
+
+  try {
+    const candidates: ModelCandidate[] = [];
+    const pager = await ai.models.list();
+    for await (const model of pager) {
+      candidates.push({
+        name: model.name ?? "",
+        supportedActions: model.supportedActions,
+      });
+      if (candidates.length >= 300) break;
+    }
+
+    const models = rankModels(candidates);
+    if (models.length === 0) {
+      throw new Error("使えるモデルが 1 つも見つかりませんでした");
+    }
+
+    console.log(`[gemini] 使用するモデルを自動検出しました: ${models.join(" / ")}`);
+    modelCache = { models, expiresAt: Date.now() + MODEL_CACHE_MS };
+    lastTriedModels = models;
+    return models;
+  } catch (e) {
+    console.error(`[gemini] モデル一覧の取得に失敗しました: ${messageOf(e)}`);
+    lastTriedModels = FALLBACK_MODELS;
+    return FALLBACK_MODELS;
+  }
+}
+
+/** 自動検出のやり直しを促す(全モデルが提供終了だったときなど) */
+export function invalidateModelCache(): void {
+  modelCache = null;
+}
 
 export const GEMINI_NOT_CONFIGURED_MESSAGE =
   "Gemini API キーが設定されていません。環境変数 GEMINI_API_KEY を設定してください(取得方法は README を参照)。";
@@ -156,7 +274,7 @@ export function describeGeminiError(e: unknown): GeminiFailure {
     return {
       status: 502,
       message:
-        `AI モデル(${GEMINI_MODELS.join(" / ")})が利用できませんでした。` +
+        `AI モデル(${lastTriedModels.join(" / ")})が利用できませんでした。` +
         "モデルの提供が終了している可能性があります。管理者は /api/gemini/health で利用できるモデルを確認してください。",
       code: "MODEL_UNAVAILABLE",
     };
@@ -271,10 +389,12 @@ export async function generateContent(
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown = null;
 
+  const models = await resolveModels(ai);
+
   // 試す順番。thinkingLevel に対応していないモデルに当たると 400 で弾かれるため、
   // そのモデルは thinkingConfig 抜きでもう一度だけ試せるようにしておく。
   const attempts: { model: string; withThinking: boolean }[] = [];
-  for (const model of GEMINI_MODELS) {
+  for (const model of models) {
     if (options.thinkingLevel && supportsThinkingLevel(model)) {
       attempts.push({ model, withThinking: true });
     }
@@ -337,6 +457,9 @@ export async function generateContent(
       skipModel = model;
     }
   }
+
+  // 候補が全滅した = 自動検出した一覧が古い可能性があるので、次回は取り直す
+  if (isModelUnavailable(lastError)) invalidateModelCache();
 
   throw new GeminiError(describeGeminiError(lastError));
 }

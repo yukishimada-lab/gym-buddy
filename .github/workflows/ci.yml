@@ -1,0 +1,62 @@
+# ============================================================
+# コードの検証(lint / テスト / ビルド)
+#
+# main へのプッシュと、すべてのプルリクエストで動きます。
+# ここが緑になっていれば「壊れたまま本番に出る」ことはほぼありません。
+#
+# 何をしているか:
+#   1. npm ci        … package-lock.json のとおりに依存を入れる
+#   2. npm run lint  … 書き方のチェック(未使用の変数など)
+#   3. npm test      … 計算ロジックのユニットテスト(lib/*.test.ts)
+#   4. npm run build … 本番と同じ組み立て。型エラーもここで出る
+#
+# ※ 環境変数(Supabase / Gemini のキー)は要りません。
+#    キーが無くてもビルドが通るように作ってあります。
+#
+# ※ このワークフローは Vercel のデプロイとは独立しています。
+#    ここが失敗しても Vercel のデプロイは止まりませんが、
+#    赤いまま放置しないでください。
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  # 同じブランチで続けてプッシュしたときは、古い実行を打ち切る
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint / test / build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: Node.js をセットアップ
+        uses: actions/setup-node@v4
+        with:
+          # Vercel の実行環境に合わせる
+          node-version: 22
+          cache: npm
+
+      - name: 依存パッケージを入れる
+        run: npm ci
+
+      - name: 書き方をチェックする (lint)
+        run: npm run lint
+
+      - name: ユニットテストを実行する
+        run: npm test
+
+      - name: 本番と同じ形にビルドする(型エラーもここで出ます)
+        run: npm run build

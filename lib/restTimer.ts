@@ -52,11 +52,20 @@ export type RestSettings = {
   sound: boolean;
   /** 記録を追加したら自動で休憩を始めるか */
   autoStart: boolean;
+  /**
+   * 画面を消していても鳴らすか。
+   *
+   * 有効にすると、休憩の開始と同時に「無音 → 終了音」の音声を再生し続ける
+   * (lib/restAlarm.ts)。ロック中でも鳴る代わりに、再生中は他のアプリの
+   * 音楽が止まることがあるので、切れるようにしてある。
+   */
+  lockScreen: boolean;
 };
 
 export const DEFAULT_REST_SETTINGS: RestSettings = {
   sound: true,
   autoStart: true,
+  lockScreen: true,
 };
 
 const SECONDS_KEY = "gym-buddy.restSeconds.v1";
@@ -126,6 +135,10 @@ export function loadRestSettings(): RestSettings {
       typeof raw.autoStart === "boolean"
         ? raw.autoStart
         : DEFAULT_REST_SETTINGS.autoStart,
+    lockScreen:
+      typeof raw.lockScreen === "boolean"
+        ? raw.lockScreen
+        : DEFAULT_REST_SETTINGS.lockScreen,
   };
 }
 

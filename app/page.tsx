@@ -28,6 +28,8 @@ import {
   memoText,
   sortLogs,
   sortSets,
+  toSetInputs,
+  toSetRows,
   totalVolume,
   type PreviousMemo,
   type PreviousRecord,
@@ -62,24 +64,6 @@ const MEMO_PLACEHOLDER =
 type DeletedSnapshot = {
   logs: WorkoutLogWithExercise[];
 };
-
-/** DB のセットを入力フォーム用の文字列に変換する */
-function toSetInputs(sets: WorkoutSet[]): SetInput[] {
-  return sortSets(sets).map((s) => ({
-    id: s.id,
-    weight_kg: String(Number(s.weight_kg)),
-    reps: String(Number(s.reps)),
-  }));
-}
-
-/** 入力値を保存できる形(数値)に変換する。空欄は 0 扱い */
-function toSetRows(sets: SetInput[]) {
-  return sets.map((s, index) => ({
-    set_number: index + 1,
-    weight_kg: Number(s.weight_kg) || 0,
-    reps: Number(s.reps) || 0,
-  }));
-}
 
 function exerciseName(log: WorkoutLogWithExercise): string {
   return log.exercises?.name ?? "(削除された種目)";

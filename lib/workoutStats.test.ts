@@ -13,6 +13,8 @@ import {
   sortSets,
   summarize,
   summaryLine,
+  toSetInputs,
+  toSetRows,
   totalReps,
   totalVolume,
   type SetLike,
@@ -214,6 +216,59 @@ describe("メモ", () => {
     expect(map.get("bench")).toEqual({
       date: "2026-08-30",
       memo: "次回は+2.5kg",
+    });
+  });
+});
+
+describe("toSetInputs(DB → 入力欄)", () => {
+  it("重量が入っている記録はそのまま出す", () => {
+    expect(toSetInputs([dbSet(1, 80, 10)])).toEqual([
+      { id: "s1", weight_kg: "80", reps: "10" },
+    ]);
+  });
+
+  it("0 は空欄で出す(打つ前に 0 を消す手間をなくすため)", () => {
+    expect(toSetInputs([dbSet(1, 0, 10)])).toEqual([
+      { id: "s1", weight_kg: "", reps: "10" },
+    ]);
+    expect(toSetInputs([dbSet(1, 0, 0)])).toEqual([
+      { id: "s1", weight_kg: "", reps: "" },
+    ]);
+  });
+
+  it("セット番号の順にそろえる", () => {
+    const inputs = toSetInputs([dbSet(2, 70, 8), dbSet(1, 80, 10)]);
+    expect(inputs.map((s) => s.weight_kg)).toEqual(["80", "70"]);
+  });
+
+  it("余計な小数を出さない(80.0 ではなく 80)", () => {
+    expect(toSetInputs([dbSet(1, 80.0, 10)])[0].weight_kg).toBe("80");
+    expect(toSetInputs([dbSet(1, 82.5, 10)])[0].weight_kg).toBe("82.5");
+  });
+});
+
+describe("toSetRows(入力欄 → DB)", () => {
+  it("空欄は 0 として保存する(空欄で出したものが往復しても壊れない)", () => {
+    expect(toSetRows([{ id: null, weight_kg: "", reps: "" }])).toEqual([
+      { set_number: 1, weight_kg: 0, reps: 0 },
+    ]);
+  });
+
+  it("セット番号を 1 から振り直す", () => {
+    const rows = toSetRows([
+      { id: null, weight_kg: "80", reps: "10" },
+      { id: null, weight_kg: "70", reps: "8" },
+    ]);
+    expect(rows.map((r) => r.set_number)).toEqual([1, 2]);
+  });
+
+  it("空欄で出した記録を保存し直しても、また空欄で開ける", () => {
+    const rows = toSetRows(toSetInputs([dbSet(1, 0, 10)]));
+    expect(rows).toEqual([{ set_number: 1, weight_kg: 0, reps: 10 }]);
+    expect(toSetInputs([dbSet(1, rows[0].weight_kg, rows[0].reps)])[0]).toEqual({
+      id: "s1",
+      weight_kg: "",
+      reps: "10",
     });
   });
 });

@@ -1,4 +1,4 @@
-import type { WorkoutLogWithExercise, WorkoutSet } from "@/lib/types";
+import type { SetInput, WorkoutLogWithExercise, WorkoutSet } from "@/lib/types";
 
 /**
  * ワークアウト記録の集計と「前回との比較」の判定。
@@ -201,6 +201,31 @@ export function formatSets(sets: SetLike[]): string {
   return sets
     .map((s) => `${formatWeight(Number(s.weight_kg))}kg×${Number(s.reps)}回`)
     .join(" / ");
+}
+
+/**
+ * DB のセットを入力フォーム用の文字列に変換する。
+ *
+ * 0 は「入力しなかった」という意味で保存されている(自重種目や、
+ * ルーティンを展開しただけでまだ数値を入れていない記録)。
+ * それを編集欄に「0」と出すと、打ち込む前に毎回 0 を消すことになるので、
+ * 0 は空欄として出す。空欄のまま保存すればまた 0 に戻る(toSetRows)。
+ */
+export function toSetInputs(sets: WorkoutSet[]): SetInput[] {
+  return sortSets(sets).map((s) => ({
+    id: s.id,
+    weight_kg: Number(s.weight_kg) > 0 ? String(Number(s.weight_kg)) : "",
+    reps: Number(s.reps) > 0 ? String(Number(s.reps)) : "",
+  }));
+}
+
+/** 入力値を保存できる形(数値)に変換する。空欄は 0 扱い */
+export function toSetRows(sets: SetInput[]) {
+  return sets.map((s, index) => ({
+    set_number: index + 1,
+    weight_kg: Number(s.weight_kg) || 0,
+    reps: Number(s.reps) || 0,
+  }));
 }
 
 /** 記録一覧を sort_order 昇順にそろえる(同値なら作成順) */

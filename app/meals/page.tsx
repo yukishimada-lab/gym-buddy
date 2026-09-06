@@ -424,6 +424,13 @@ function MealsPage() {
     );
   };
 
+  /**
+   * 手動入力の空の行を足す。
+   *
+   * 数値はすべて空欄にしておく。0 を入れておくと、入力のたびに 0 を
+   * 消してから打ち直すことになって手間がかかるため。
+   * 空欄のまま記録すると 0 として保存される(入力欄の薄い「0」がその案内)。
+   */
   const addEmptyDraft = () => {
     setDrafts((prev) => [
       ...prev,
@@ -433,10 +440,10 @@ function MealsPage() {
         food_item_id: null,
         food_name: "",
         amount_g: "",
-        protein_g: "0",
-        fat_g: "0",
-        carbs_g: "0",
-        calories: "0",
+        protein_g: "",
+        fat_g: "",
+        carbs_g: "",
+        calories: "",
         per100: null,
       },
     ]);
@@ -774,7 +781,9 @@ function MealsPage() {
     label: string,
     value: string,
     onChange: (v: string) => void,
-    step = "0.1"
+    step = "0.1",
+    /** 空欄のときに薄く出す文字。既定は「0」(空欄なら 0 として保存されるため) */
+    placeholder = "0"
   ) => (
     <label className="text-xs text-gray-500">
       {label}
@@ -783,6 +792,7 @@ function MealsPage() {
         inputMode="decimal"
         step={step}
         min="0"
+        placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 w-full rounded-lg border border-gray-300 px-2 py-1.5"
@@ -913,8 +923,12 @@ function MealsPage() {
                             />
                           </label>
                           <div className="mt-2 grid grid-cols-2 gap-2">
-                            {numberField("グラム(g)", edit.amount_g, (v) =>
-                              setEdit({ ...edit, amount_g: v })
+                            {numberField(
+                              "グラム(g)",
+                              edit.amount_g,
+                              (v) => setEdit({ ...edit, amount_g: v }),
+                              "0.1",
+                              "任意"
                             )}
                             {numberField("カロリー(kcal)", edit.calories, (v) =>
                               setEdit({ ...edit, calories: v })
@@ -1404,7 +1418,9 @@ function MealsPage() {
                       d.per100 ? "グラム(g)※PFC自動計算" : "グラム(g)",
                       d.amount_g,
                       (v) => updateDraft(d.key, { amount_g: v }),
-                      "1"
+                      "1",
+                      // グラムは「空欄 = 分からない」で、0 とは意味が違う
+                      "任意"
                     )}
                     {numberField("カロリー(kcal)", d.calories, (v) =>
                       updateDraft(d.key, { calories: v })

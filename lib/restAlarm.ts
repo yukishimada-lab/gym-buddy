@@ -71,16 +71,16 @@ export function alarmSchedule(restSeconds: number): AlarmTone[] {
     const startSec = restSeconds - remaining;
     // 3 秒より短い休憩では、予告音が先頭より前になるので鳴らさない
     if (startSec > 0) {
-      tones.push({ startSec, durationSec: 0.09, frequency: 660, volume: 0.25 });
+      tones.push({ startSec, durationSec: 0.09, frequency: 660, volume: 0.5 });
     }
   }
 
   for (let i = 0; i < FINISH_REPEATS; i++) {
     const base = restSeconds + i * FINISH_INTERVAL_SEC;
     // ピッ ピッ ポーン(最後だけ高く長く)
-    tones.push({ startSec: base, durationSec: 0.16, frequency: 880, volume: 0.45 });
-    tones.push({ startSec: base + 0.22, durationSec: 0.16, frequency: 880, volume: 0.45 });
-    tones.push({ startSec: base + 0.44, durationSec: 0.34, frequency: 1175, volume: 0.5 });
+    tones.push({ startSec: base, durationSec: 0.16, frequency: 880, volume: 0.9 });
+    tones.push({ startSec: base + 0.22, durationSec: 0.16, frequency: 880, volume: 0.9 });
+    tones.push({ startSec: base + 0.44, durationSec: 0.34, frequency: 1175, volume: 0.95 });
   }
 
   return tones;

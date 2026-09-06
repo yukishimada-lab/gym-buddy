@@ -109,7 +109,18 @@ export function useRestTimer() {
       if (left <= 0) {
         if (!firedRef.current) {
           firedRef.current = true;
-          if (soundOn && !scheduled) playBeep("finish");
+          if (soundOn) {
+            // 画面が見えている = JavaScript が動いている状況なら、
+            // 予約再生に頼らず、確実に鳴らせる従来の方式で鳴らす。
+            // (端末の設定などで予約再生の音が出なかった場合の保険も兼ねる)
+            if (document.visibilityState === "visible") {
+              stopScheduledAlarm();
+              playBeep("finish");
+            } else if (!scheduled) {
+              // 裏に回っていて予約再生も無い場合は、戻ってきた時点で鳴らす
+              playBeep("finish");
+            }
+          }
           vibrate([200, 100, 200, 100, 400]);
         }
         return;

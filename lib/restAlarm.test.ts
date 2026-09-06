@@ -100,6 +100,20 @@ describe("renderAlarmWav", () => {
     expect(finishChunk.some((v) => v !== 128)).toBe(true);
   });
 
+  it("終了音がしっかり大きい(小さすぎて気づけない事故を防ぐ)", () => {
+    const samples = wav.slice(44);
+    const finishChunk = samples.slice(
+      Math.round(10 * 8000),
+      Math.round(10.16 * 8000)
+    );
+    const peak = Math.max(...finishChunk.map((v) => Math.abs(v - 128)));
+    // 8bit の振幅は最大 127。その 8 割以上は出す
+    expect(peak).toBeGreaterThan(100);
+    // ただし振り切って歪まないこと(0〜255 に収まっていること)
+    expect(Math.max(...finishChunk)).toBeLessThanOrEqual(255);
+    expect(Math.min(...finishChunk)).toBeGreaterThanOrEqual(0);
+  });
+
   it("1 秒あたり 8KB 程度に収まる(長い休憩でも重くなりすぎない)", () => {
     const perSecond = renderAlarmWav(60).byteLength / 60;
     expect(perSecond).toBeLessThan(9000);

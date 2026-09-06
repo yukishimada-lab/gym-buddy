@@ -6,6 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import BottomNav from "@/components/BottomNav";
 import InstallPrompt from "@/components/InstallPrompt";
+import { RestTimerProvider } from "@/components/RestTimerProvider";
 
 /**
  * 全ページ共通のシェル。
@@ -84,7 +85,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const showBottomNav = Boolean(user) && !isPublicPath;
 
-  return (
+  const content = (
     // ノッチ側(上・左右)はここでまとめて避ける。
     // 下側はボトムナビと各画面の固定要素が個別に env(safe-area-inset-bottom) を見ている。
     <div className="mx-auto min-h-dvh max-w-md pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
@@ -99,4 +100,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <InstallPrompt hasBottomNav={showBottomNav} />
     </div>
   );
+
+  // 休憩タイマーはログイン後の画面すべてで動かす。
+  // 記録ページの中に置くと、別のタブに移った瞬間に止まってしまうため。
+  if (!showBottomNav) return content;
+  return <RestTimerProvider>{content}</RestTimerProvider>;
 }

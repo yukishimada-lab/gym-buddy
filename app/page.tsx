@@ -8,7 +8,7 @@ import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
 import HelpButton from "@/components/HelpButton";
-import RestTimerBar, { useRestTimer } from "@/components/RestTimerBar";
+import { useRestTimerContext } from "@/components/RestTimerProvider";
 import ExercisePicker from "@/components/ExercisePicker";
 import { GripVertical, NotebookPen, StickyNote, Timer } from "lucide-react";
 import {
@@ -199,7 +199,17 @@ function RecordPage() {
   const [justExpanded, setJustExpanded] = useState(false);
 
   // セット間の休憩タイマー(状態とロジックはフック側に持たせている)
-  const timer = useRestTimer();
+  // タイマー本体は AppShell が持っている(タブを移動しても止まらないように)
+  const timer = useRestTimerContext();
+  const { setRaised } = timer;
+
+  // 一括削除バーや「元に戻す」が下に出ているあいだは、
+  // 休憩タイマーのバーが重ならないよう一段上げてもらう
+  const barRaised = selectMode || undoTarget != null;
+  useEffect(() => {
+    setRaised(barRaised);
+    return () => setRaised(false);
+  }, [barRaised, setRaised]);
 
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
@@ -1215,9 +1225,9 @@ function RecordPage() {
         )}
       </section>
 
-      {/* 固定した一括削除バー / スナックバー / 休憩タイマーに隠れないよう、下に余白を足す */}
+      {/* 固定した一括削除バー / スナックバーに隠れないよう、下に余白を足す
+          (休憩タイマーのぶんの余白は AppShell 側でまとめて足している) */}
       {(selectMode || undoTarget) && <div className="h-24" aria-hidden />}
-      {timer.session && <div className="h-52" aria-hidden />}
 
       {/*
         一括削除バー(下部ナビの上に固定して、親指で押しやすい位置に置く)。
@@ -1249,8 +1259,7 @@ function RecordPage() {
         </div>
       )}
 
-      {/* セット間の休憩タイマー(下部ナビの上に固定) */}
-      <RestTimerBar timer={timer} raised={selectMode || undoTarget != null} />
+
 
       {/* 削除の取り消し(数秒だけ出す) */}
       {undoTarget && (

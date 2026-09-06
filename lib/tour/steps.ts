@@ -68,6 +68,12 @@ const RECORD: TourStep[] = [
       "種目を選んで「追加する」を押すと、この日の記録に加わります。種目は「種目」タブで増やせます。",
   },
   {
+    target: "record-exercise",
+    title: "種目の探しかた",
+    description:
+      "部位のボタンで絞り込むか、検索ボックスに名前の一部を入れると候補が減ります。選ぶと一覧はたたまれます。",
+  },
+  {
     target: "record-sets",
     title: "セットごとに入力",
     description:

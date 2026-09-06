@@ -14,7 +14,7 @@ import {
   totalReps,
   totalVolume,
 } from "@/lib/workoutStats";
-import type { DaySummary, MealType } from "@/lib/types";
+import type { DaySummary, MealType, WorkoutSet } from "@/lib/types";
 
 /**
  * 1 日のサマリーを 1 枚の縦長画像にするためのカード。
@@ -23,17 +23,20 @@ import type { DaySummary, MealType } from "@/lib/types";
  * - スタイルはすべてインラインの 16 進カラーで書く。
  *   Tailwind v4 の色は oklch() なので、DOM を SVG に写して描画する
  *   html-to-image では環境によって色が落ちることがある。
+ * - グラデーション・影・画像は使わない(書き出し環境によって落ちるため)。
+ *   立体感は「濃い面」「薄い面」「余白」だけで作る。
  * - フォントは端末に必ずある日本語フォントだけを指定する(Web フォントを
  *   読み込むと、書き出し時にフォントが間に合わず豆腐になることがある)。
- * - 画像・外部リソースは一切使わない(CORS で書き出しが失敗するため)。
  *
  * ■ 配色(dataviz スキルの指針)
  * - カテゴリカルは lib/viz.ts の固定スロット順(青=トレーニング / 橙=食事 /
  *   アクア=からだ)だけを使い、順番を入れ替えない。
  * - 部位は 8 区分あるためカテゴリカル色は割り当てず、見出しの文字で区別する
  *   (9 色目を作らない・色だけに意味を持たせない)。
- * - PFC の積み上げバーは各セグメントの間に 2px の隙間を空け、色の凡例だけに
- *   頼らないよう「P 150g」のように直接ラベルを併記する。
+ * - 数値やラベルには系列色を使わず、必ず文字色(ink)で書く。
+ *   色は隣に置いたマーク(帯・ドット)だけが持つ。
+ * - セットの帯は「1 系列の量」なので単色 + 薄い同色のトラック。
+ *   データ側の端だけ丸め、始点は基準線にそろえる。
  */
 
 /** 端末にある日本語フォントだけで組む(iOS Safari / Android / PC 共通) */
@@ -43,6 +46,15 @@ const FONT_STACK =
 /** 書き出す画像の幅(px)。実際の PNG は pixelRatio 2 で 2 倍になる */
 export const CARD_WIDTH = 640;
 
+/** 見出し帯の地の色(濃い面)と、その上に置くタイルの面 */
+const INK = "#111110";
+const INK_TILE = "#232320";
+const INK_TEXT = "#ffffff";
+const INK_MUTED = "#a3a29c";
+
+/** 本文側の薄い面(カードの地) */
+const SURFACE_SOFT = "#f7f7f4";
+
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
   breakfast: "朝食",
   lunch: "昼食",
@@ -51,6 +63,9 @@ const MEAL_TYPE_LABELS: Record<MealType, string> = {
 };
 
 const MEAL_TYPE_ORDER: MealType[] = ["breakfast", "lunch", "dinner", "snack"];
+
+/** 見出し帯に並べる数値 */
+type Headline = { label: string; value: string; unit?: string };
 
 function SectionHeading({ color, label }: { color: string; label: string }) {
   return (
@@ -80,6 +95,105 @@ function SectionHeading({ color, label }: { color: string; label: string }) {
         }}
       >
         {label}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * セット 1 つぶんの行。
+ *
+ * 以前は「50kg×3回 / 40kg×5回 / …」と 1 行に詰めていたが、
+ * セットが増えるほど折り返して読めなくなるため 1 セット 1 行にした。
+ * 右の帯は、その種目の中でいちばん大きいセットを 100% とした量の目安。
+ */
+function SetRow({
+  index,
+  set,
+  weighted,
+  ratio,
+}: {
+  index: number;
+  set: WorkoutSet;
+  /** その種目に重量が入っているか(自重種目なら回数だけで組む) */
+  weighted: boolean;
+  /** 帯の長さ(0〜1) */
+  ratio: number;
+}) {
+  const weight = Number(set.weight_kg);
+  const reps = Number(set.reps);
+  const volume = weight * reps;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "6px 0",
+      }}
+    >
+      <span
+        style={{
+          width: 36,
+          flexShrink: 0,
+          fontSize: 12,
+          fontWeight: 700,
+          color: VIZ.muted,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {index + 1}set
+      </span>
+
+      {/* 数値が主役。帯はあくまで補助なので、幅は数値側に多く渡す */}
+      <span
+        style={{
+          flex: 1,
+          fontSize: 16,
+          fontWeight: 600,
+          color: VIZ.textPrimary,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {weighted ? `${formatWeight(weight)}kg × ${reps}回` : `${reps}回`}
+      </span>
+
+      {/* 量の目安。トラックは同じ色の薄い段(dataviz のメーター指定) */}
+      <div
+        style={{
+          width: 116,
+          flexShrink: 0,
+          height: 5,
+          borderRadius: 4,
+          backgroundColor: VIZ.series1Tint,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.max(2, Math.round(ratio * 100))}%`,
+            height: 5,
+            // 始点は基準線にそろえ、データ側の端だけ丸める
+            borderRadius: "0 4px 4px 0",
+            backgroundColor: VIZ.series1,
+          }}
+        />
+      </div>
+
+      {/* 重量がある種目だけ、そのセットのボリュームを出す。
+          自重種目でも枠は残して、行ごとに列がずれないようにする */}
+      <span
+        style={{
+          width: 66,
+          flexShrink: 0,
+          textAlign: "right",
+          fontSize: 13,
+          color: VIZ.textSecondary,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {weighted ? `${formatNumber(volume)}kg` : ""}
       </span>
     </div>
   );
@@ -160,18 +274,16 @@ function BodyStat({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        backgroundColor: "#f6f6f4",
+        backgroundColor: SURFACE_SOFT,
         borderRadius: 12,
-        padding: "10px 14px",
-        minWidth: 120,
+        padding: "12px 16px",
+        minWidth: 124,
       }}
     >
       <div style={{ fontSize: 13, color: VIZ.textSecondary, marginBottom: 4 }}>
         {label}
       </div>
-      <div
-        style={{ fontSize: 20, fontWeight: 700, color: VIZ.textPrimary }}
-      >
+      <div style={{ fontSize: 21, fontWeight: 700, color: VIZ.textPrimary }}>
         {value}
       </div>
     </div>
@@ -188,7 +300,7 @@ export default function DaySummaryCard({
 }) {
   const { sections, meals, nutrition, body } = summary;
 
-  // その日のトレーニング全体の合計(見出しの横に出す)
+  // その日のトレーニング全体の合計(見出し帯に出す)
   const allLogs = sections.flatMap((s) => s.items);
   const allSets = allLogs.flatMap((log) => log.workout_sets ?? []);
   const dayVolume = totalVolume(allSets);
@@ -230,6 +342,45 @@ export default function DaySummaryCard({
       ].filter((s): s is { label: string; value: string } => s !== null)
     : [];
 
+  /**
+   * 見出し帯に並べる 3 つの数値。
+   * その日に何を記録したかで中身が変わる(トレーニングが主役、無ければ食事)。
+   */
+  const headlines: Headline[] = [];
+  if (hasWorkout) {
+    headlines.push({ label: "種目", value: String(allLogs.length) });
+    headlines.push({ label: "セット", value: String(allSets.length) });
+    if (dayVolume > 0) {
+      headlines.push({
+        label: "総ボリューム",
+        value: formatNumber(dayVolume),
+        unit: "kg",
+      });
+    } else {
+      headlines.push({
+        label: "総レップ",
+        value: formatNumber(totalReps(allSets)),
+        unit: "回",
+      });
+    }
+  } else if (hasMeals) {
+    headlines.push({
+      label: "カロリー",
+      value: formatNumber(nutrition.calories),
+      unit: "kcal",
+    });
+    headlines.push({
+      label: "タンパク質",
+      value: formatNumber(nutrition.protein_g, 1),
+      unit: "g",
+    });
+    headlines.push({ label: "品目", value: String(meals.length) });
+  } else {
+    for (const stat of bodyStats.slice(0, 3)) {
+      headlines.push({ label: stat.label, value: stat.value });
+    }
+  }
+
   // 食事は「朝食 / 昼食 / 夕食 / 間食」ごとにまとめる(記録がある区分だけ)
   const mealGroups = MEAL_TYPE_ORDER.map((type) => ({
     type,
@@ -245,244 +396,326 @@ export default function DaySummaryCard({
         backgroundColor: "#ffffff",
         fontFamily: FONT_STACK,
         color: VIZ.textPrimary,
-        padding: 32,
-        // 縦長にしたいので最低限の高さを確保する
         minHeight: 800,
         display: "flex",
         flexDirection: "column",
       }}
     >
-      {/* ヘッダー */}
-      <div
-        style={{
-          borderBottom: `3px solid ${VIZ.textPrimary}`,
-          paddingBottom: 18,
-          marginBottom: 24,
-        }}
-      >
+      {/* ── 見出し帯(濃い面)──────────────────────── */}
+      <div style={{ backgroundColor: INK, padding: "30px 32px 26px" }}>
         <div
           style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: VIZ.series1,
-            letterSpacing: "0.14em",
-            marginBottom: 8,
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 10,
           }}
         >
-          GYM BUDDY
-        </div>
-        <div style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.25 }}>
-          {formatDateLabel(summary.date)}
-        </div>
-      </div>
-
-      {/* トレーニング(記録がある日だけ) */}
-      {hasWorkout && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionHeading color={VIZ.series1} label="トレーニング" />
-          <div
+          <span
             style={{
-              fontSize: 15,
-              color: VIZ.textSecondary,
-              marginBottom: 16,
+              fontSize: 13,
+              fontWeight: 700,
+              color: INK_MUTED,
+              letterSpacing: "0.18em",
             }}
           >
-            {allLogs.length}種目 · {allSets.length}セット
-            {dayVolume > 0 && ` · 総ボリューム ${formatNumber(dayVolume)}kg`}
-          </div>
+            GYM BUDDY
+          </span>
+          <span style={{ fontSize: 13, color: INK_MUTED }}>#筋トレ記録</span>
+        </div>
 
-          {sections.map((section) => (
-            <div key={section.group} style={{ marginBottom: 18 }}>
-              {/* 部位の見出し。色ではなく文字と罫線で区別する */}
+        <div
+          style={{
+            fontSize: 32,
+            fontWeight: 700,
+            lineHeight: 1.2,
+            color: INK_TEXT,
+          }}
+        >
+          {formatDateLabel(summary.date)}
+        </div>
+
+        {headlines.length > 0 && (
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            {headlines.map((stat) => (
               <div
+                key={stat.label}
                 style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  gap: 8,
-                  borderLeft: `4px solid ${VIZ.series1}`,
-                  paddingLeft: 10,
-                  marginBottom: 10,
+                  flex: 1,
+                  backgroundColor: INK_TILE,
+                  borderRadius: 12,
+                  padding: "12px 14px",
                 }}
               >
-                <span style={{ fontSize: 17, fontWeight: 700 }}>
-                  {section.group}
-                </span>
-                <span style={{ fontSize: 13, color: VIZ.textSecondary }}>
-                  {section.items.length}種目
-                </span>
-              </div>
-
-              {section.items.map((log) => {
-                const sets = sortSets(log.workout_sets ?? []);
-                const weighted = hasWeight(sets);
-                return (
-                  <div
-                    key={log.id}
-                    style={{
-                      padding: "8px 0 8px 14px",
-                      borderBottom: `1px solid ${VIZ.grid}`,
-                    }}
+                <div
+                  style={{ fontSize: 12, color: INK_MUTED, marginBottom: 5 }}
+                >
+                  {stat.label}
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
+                  {/* 大きい数値には tabular-nums を使わない(字間が空いて見えるため) */}
+                  <span
+                    style={{ fontSize: 24, fontWeight: 700, color: INK_TEXT }}
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "baseline",
-                        gap: 12,
-                        marginBottom: 4,
-                      }}
-                    >
-                      <span style={{ fontSize: 16, fontWeight: 600 }}>
-                        {log.exercises?.name ?? "(削除された種目)"}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 14,
-                          fontWeight: 700,
-                          color: VIZ.series1,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {weighted
-                          ? `最大 ${formatWeight(maxWeight(sets))}kg`
-                          : `計 ${formatNumber(totalReps(sets))}回`}
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        color: VIZ.textSecondary,
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      {sets.length === 0
-                        ? "セット未入力"
-                        : sets
-                            .map((s) =>
-                              weighted
-                                ? `${formatWeight(Number(s.weight_kg))}kg×${Number(s.reps)}回`
-                                : `${Number(s.reps)}回`
-                            )
-                            .join("  /  ")}
-                      {weighted &&
-                        ` ・ 総ボリューム ${formatNumber(totalVolume(sets))}kg`}
-                    </div>
+                    {stat.value}
+                  </span>
+                  {stat.unit && (
+                    <span style={{ fontSize: 13, color: INK_MUTED }}>
+                      {stat.unit}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-                    {/* その種目のメモ(あれば) */}
-                    {hasMemo(log.memo) && (
+      {/* ── 本文 ─────────────────────────────── */}
+      <div style={{ flex: 1, padding: "26px 32px 0" }}>
+        {/* トレーニング(記録がある日だけ) */}
+        {hasWorkout && (
+          <div style={{ marginBottom: 26 }}>
+            <SectionHeading color={VIZ.series1} label="トレーニング" />
+
+            {sections.map((section) => (
+              <div key={section.group} style={{ marginBottom: 18 }}>
+                {/* 部位の見出し。色ではなく文字と罫線で区別する */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: 8,
+                    borderLeft: `4px solid ${VIZ.series1}`,
+                    paddingLeft: 10,
+                    marginBottom: 10,
+                  }}
+                >
+                  <span style={{ fontSize: 17, fontWeight: 700 }}>
+                    {section.group}
+                  </span>
+                  <span style={{ fontSize: 13, color: VIZ.textSecondary }}>
+                    {section.items.length}種目
+                  </span>
+                </div>
+
+                {section.items.map((log) => {
+                  const sets = sortSets(log.workout_sets ?? []);
+                  const weighted = hasWeight(sets);
+                  // 帯の基準は、その種目の中でいちばん大きいセット
+                  const values = sets.map((s) =>
+                    weighted
+                      ? Number(s.weight_kg) * Number(s.reps)
+                      : Number(s.reps)
+                  );
+                  const peak = Math.max(1, ...values);
+
+                  return (
+                    <div
+                      key={log.id}
+                      style={{
+                        backgroundColor: SURFACE_SOFT,
+                        borderRadius: 14,
+                        padding: "14px 16px",
+                        marginBottom: 8,
+                      }}
+                    >
                       <div
                         style={{
                           display: "flex",
-                          gap: 6,
-                          marginTop: 6,
-                          padding: "6px 10px",
-                          backgroundColor: "#f6f6f4",
-                          borderRadius: 8,
-                          fontSize: 13,
-                          lineHeight: 1.6,
-                          color: VIZ.textSecondary,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 12,
                         }}
                       >
-                        <StickyNote
-                          aria-hidden
-                          size={14}
-                          strokeWidth={2}
-                          style={{ flexShrink: 0, marginTop: 2 }}
-                        />
-                        <span>{memoText(log.memo)}</span>
+                        <span style={{ fontSize: 17, fontWeight: 700 }}>
+                          {log.exercises?.name ?? "(削除された種目)"}
+                        </span>
+                        {/* 数値は文字色で書き、色は面(タグの地)だけが持つ */}
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            backgroundColor: VIZ.series1Tint,
+                            color: VIZ.textPrimary,
+                            borderRadius: 999,
+                            padding: "4px 12px",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {weighted
+                            ? `最大 ${formatWeight(maxWeight(sets))}kg`
+                            : `計 ${formatNumber(totalReps(sets))}回`}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* 食事(記録がある日だけ) */}
-      {hasMeals && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionHeading color={VIZ.series2} label="食事" />
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ fontSize: 32, fontWeight: 700 }}>
-              {formatNumber(nutrition.calories)}
-            </span>
-            <span style={{ fontSize: 16, color: VIZ.textSecondary }}>kcal</span>
-            <span
-              style={{
-                fontSize: 14,
-                color: VIZ.textSecondary,
-                marginLeft: "auto",
-              }}
-            >
-              {meals.length}品
-            </span>
-          </div>
+                      {sets.length === 0 ? (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            fontSize: 14,
+                            color: VIZ.muted,
+                          }}
+                        >
+                          セット未入力
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 8 }}>
+                          {sets.map((set, i) => (
+                            <SetRow
+                              key={set.id}
+                              index={i}
+                              set={set}
+                              weighted={weighted}
+                              ratio={values[i] / peak}
+                            />
+                          ))}
+                        </div>
+                      )}
 
-          <PfcBar
-            protein={nutrition.protein_g}
-            fat={nutrition.fat_g}
-            carbs={nutrition.carbs_g}
-          />
+                      {/* その種目の合計 */}
+                      <div
+                        style={{
+                          marginTop: 10,
+                          paddingTop: 10,
+                          borderTop: `1px solid ${VIZ.grid}`,
+                          fontSize: 13,
+                          color: VIZ.textSecondary,
+                        }}
+                      >
+                        {sets.length}セット
+                        {weighted
+                          ? ` · 総ボリューム ${formatNumber(totalVolume(sets))}kg`
+                          : ` · 計 ${formatNumber(totalReps(sets))}回`}
+                      </div>
 
-          <div style={{ marginTop: 16 }}>
-            {mealGroups.map((group) => (
-              <div
-                key={group.type}
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  padding: "7px 0",
-                  borderBottom: `1px solid ${VIZ.grid}`,
-                  fontSize: 14,
-                }}
-              >
-                <span
-                  style={{
-                    width: 44,
-                    flexShrink: 0,
-                    fontWeight: 700,
-                    color: VIZ.textSecondary,
-                  }}
-                >
-                  {MEAL_TYPE_LABELS[group.type]}
-                </span>
-                <span style={{ color: VIZ.textPrimary, lineHeight: 1.6 }}>
-                  {group.items.map((m) => m.food_name).join(" / ")}
-                </span>
+                      {/* その種目のメモ(あれば) */}
+                      {hasMemo(log.memo) && (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 8,
+                            marginTop: 10,
+                            paddingLeft: 10,
+                            borderLeft: `3px solid ${VIZ.axis}`,
+                            fontSize: 13,
+                            lineHeight: 1.6,
+                            color: VIZ.textSecondary,
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          <StickyNote
+                            aria-hidden
+                            size={14}
+                            strokeWidth={2}
+                            style={{ flexShrink: 0, marginTop: 2 }}
+                          />
+                          <span>{memoText(log.memo)}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* からだ(記録がある日だけ) */}
-      {bodyStats.length > 0 && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionHeading color={VIZ.series3} label="からだ" />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {bodyStats.map((stat) => (
-              <BodyStat key={stat.label} label={stat.label} value={stat.value} />
-            ))}
+        {/* 食事(記録がある日だけ) */}
+        {hasMeals && (
+          <div style={{ marginBottom: 26 }}>
+            <SectionHeading color={VIZ.series2} label="食事" />
+            <div
+              style={{
+                backgroundColor: SURFACE_SOFT,
+                borderRadius: 14,
+                padding: "16px 18px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 34, fontWeight: 700 }}>
+                  {formatNumber(nutrition.calories)}
+                </span>
+                <span style={{ fontSize: 16, color: VIZ.textSecondary }}>
+                  kcal
+                </span>
+                <span
+                  style={{
+                    fontSize: 14,
+                    color: VIZ.textSecondary,
+                    marginLeft: "auto",
+                  }}
+                >
+                  {meals.length}品
+                </span>
+              </div>
+
+              <PfcBar
+                protein={nutrition.protein_g}
+                fat={nutrition.fat_g}
+                carbs={nutrition.carbs_g}
+              />
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {mealGroups.map((group) => (
+                <div
+                  key={group.type}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    padding: "8px 2px",
+                    borderBottom: `1px solid ${VIZ.grid}`,
+                    fontSize: 14,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 44,
+                      flexShrink: 0,
+                      fontWeight: 700,
+                      color: VIZ.textSecondary,
+                    }}
+                  >
+                    {MEAL_TYPE_LABELS[group.type]}
+                  </span>
+                  <span style={{ color: VIZ.textPrimary, lineHeight: 1.6 }}>
+                    {group.items.map((m) => m.food_name).join(" / ")}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* フッター */}
+        {/* からだ(記録がある日だけ) */}
+        {bodyStats.length > 0 && (
+          <div style={{ marginBottom: 26 }}>
+            <SectionHeading color={VIZ.series3} label="からだ" />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {bodyStats.map((stat) => (
+                <BodyStat key={stat.label} label={stat.label} value={stat.value} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── フッター ─────────────────────────── */}
       <div
         style={{
-          marginTop: "auto",
-          paddingTop: 18,
+          margin: "0 32px",
+          padding: "16px 0 26px",
           borderTop: `1px solid ${VIZ.grid}`,
           fontSize: 13,
           color: VIZ.muted,
           textAlign: "center",
         }}
       >
-        #筋トレ記録 · gym-buddy
+        gym-buddy
       </div>
     </div>
   );

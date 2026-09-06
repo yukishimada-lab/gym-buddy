@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { toPng } from "html-to-image";
 import DaySummaryCard, { CARD_WIDTH } from "@/components/DaySummaryCard";
+import { pixelRatioFor } from "@/lib/shareImage";
 import { formatDateLabel } from "@/lib/date";
 import type { DaySummary } from "@/lib/types";
 
@@ -22,7 +23,6 @@ import type { DaySummary } from "@/lib/types";
  */
 
 const IMAGE_OPTIONS = {
-  pixelRatio: 2,
   backgroundColor: "#ffffff",
   cacheBust: true,
   width: CARD_WIDTH,
@@ -46,7 +46,12 @@ export default function ShareDaySummary({
   const render = async (): Promise<string> => {
     const node = cardRef.current;
     if (!node) throw new Error("画像の元になる要素が見つかりませんでした");
-    const options = { ...IMAGE_OPTIONS, height: node.scrollHeight };
+    const height = node.scrollHeight;
+    const options = {
+      ...IMAGE_OPTIONS,
+      height,
+      pixelRatio: pixelRatioFor(CARD_WIDTH, height),
+    };
     // 1 回目は捨てる(iOS Safari でのフォント / レイアウト待ち)
     await toPng(node, options);
     return toPng(node, options);

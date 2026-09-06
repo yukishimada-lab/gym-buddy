@@ -17,6 +17,7 @@ import {
   Moon,
   Package,
   Search,
+  Sparkles,
   Star,
   Store,
   Sun,
@@ -219,6 +220,11 @@ function MealsPage() {
   const [photoError, setPhotoError] = useState<string | null>(null);
 
   // 外食検索
+  // 食品マスタに無い食品を AI に聞く
+  const [estimating, setEstimating] = useState(false);
+  const [estimateNote, setEstimateNote] = useState<string | null>(null);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
+
   const [restaurant, setRestaurant] = useState("");
   const [menu, setMenu] = useState("");
   const [searching, setSearching] = useState(false);
@@ -354,6 +360,37 @@ function MealsPage() {
       },
     ]);
     setQuery("");
+  };
+
+  /**
+   * 「100g あたり」の栄養価を下書きに追加する(AI に推定してもらった食品)。
+   * grams には、料理なら 1 人前の目安、食材なら 100g を入れる。
+   */
+  const addPer100ToDrafts = (
+    name: string,
+    per100: {
+      protein_g: number;
+      fat_g: number;
+      carbs_g: number;
+      calories: number;
+    },
+    grams: number
+  ) => {
+    setDrafts((prev) => [
+      ...prev,
+      {
+        ...DRAFT_DEFAULTS,
+        key: nextKey(),
+        food_item_id: null,
+        food_name: name,
+        amount_g: String(grams),
+        protein_g: String(scale(per100.protein_g, grams)),
+        fat_g: String(scale(per100.fat_g, grams)),
+        carbs_g: String(scale(per100.carbs_g, grams)),
+        calories: String(scale(per100.calories, grams)),
+        per100,
+      },
+    ]);
   };
 
   /** マイ商品を下書きに追加する */
@@ -575,6 +612,78 @@ function MealsPage() {
     }
   };
 
+  // ---------- 食品名から栄養価を推定(食品マスタに無いもの) ----------
+
+  /**
+   * 「豚バラ」「ピザトースト」のように、食品マスタに無い食品名から
+   * 栄養価を調べて下書きに入れる。
+   *
+   * 返ってくるのは必ず「100g あたり」の値。料理の場合は 1 人前の目安グラム数も
+   * 返るので、それを初期のグラム数に使う(あとから自由に変えられる)。
+   */
+  const estimateFood = async () => {
+    const name = query.trim();
+    if (!name) return;
+    setEstimating(true);
+    setEstimateNote(null);
+    setEstimateError(null);
+    setError(null);
+    try {
+      const result = await postJson<{
+        found?: boolean;
+        cached?: boolean;
+        item?: {
+          food_name: string;
+          protein_g: number;
+          fat_g: number;
+          carbs_g: number;
+          calories: number;
+        };
+        serving_g?: number | null;
+        note?: string | null;
+      }>("/api/meals/estimate-food", { name });
+
+      if (!result.ok) {
+        setEstimateError(result.message);
+        return;
+      }
+      const json = result.data;
+      if (!json.found || !json.item) {
+        setEstimateNote(
+          `「${name}」の栄養価は分かりませんでした。${
+            json.note ? `(${json.note})` : ""
+          }下の「空の行を追加」から手動で入力してください。`
+        );
+        return;
+      }
+
+      const { food_name, ...per100 } = json.item;
+      const grams = json.serving_g && json.serving_g > 0 ? json.serving_g : 100;
+      addPer100ToDrafts(food_name, per100, grams);
+      setEstimateNote(
+        [
+          json.cached
+            ? "前に調べた値をそのまま使いました。"
+            : "AI が推定した値です。目安なので、確認・修正してから記録してください。",
+          json.serving_g
+            ? `1人前=約${json.serving_g}g として計算しています。`
+            : "100g あたりで入れています。",
+          json.note ?? "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      setQuery("");
+    } catch (e) {
+      console.error("食品の栄養推定に失敗:", e);
+      setEstimateError(
+        "調べられませんでした。時間をおいて、もう一度お試しください。"
+      );
+    } finally {
+      setEstimating(false);
+    }
+  };
+
   // ---------- 外食メニューの栄養情報検索 ----------
 
   const searchRestaurant = async () => {
@@ -586,6 +695,7 @@ function MealsPage() {
     try {
       const result = await postJson<{
         found?: boolean;
+        cached?: boolean;
         item?: EstimatedFoodItem;
         note?: string | null;
       }>("/api/meals/restaurant-search", { restaurant, menu });
@@ -605,7 +715,11 @@ function MealsPage() {
       const item = json.item;
       setDrafts((prev) => [...prev, estimateToDraft(item)]);
       setSearchNote(
-        `栄養情報を取得しました。内容を確認・修正してから記録してください。${
+        `${
+          json.cached
+            ? "前に調べた結果を使いました(検索していません)。"
+            : "栄養情報を取得しました。"
+        }内容を確認・修正してから記録してください。${
           json.note ? `(${json.note})` : ""
         }`
       );
@@ -1017,32 +1131,69 @@ function MealsPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="食品名で検索(例: 鶏むね)"
+              placeholder="食品名で検索(例: 鶏むね / 豚バラ / ピザトースト)"
               className="w-full rounded-lg border border-gray-300 px-3 py-2"
             />
             {query.trim() && (
-              <ul className="mt-1 overflow-hidden rounded-lg border border-gray-200">
-                {filteredFoods.length === 0 ? (
-                  <li className="px-3 py-2 text-sm text-gray-400">
-                    見つかりません(下の「空の行を追加」で手動入力できます)
-                  </li>
-                ) : (
-                  filteredFoods.map((food) => (
-                    <li key={food.id} className="border-b border-gray-100 last:border-b-0">
-                      <button
-                        type="button"
-                        onClick={() => addFoodToDrafts(food)}
-                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm active:bg-gray-50"
+              <>
+                {filteredFoods.length > 0 && (
+                  <ul className="mt-1 overflow-hidden rounded-lg border border-gray-200">
+                    {filteredFoods.map((food) => (
+                      <li
+                        key={food.id}
+                        className="border-b border-gray-100 last:border-b-0"
                       >
-                        <span className="truncate font-medium">{food.name}</span>
-                        <span className="shrink-0 pl-2 text-xs text-gray-500">
-                          {Math.round(food.calories)}kcal/100g
-                        </span>
-                      </button>
-                    </li>
-                  ))
+                        <button
+                          type="button"
+                          onClick={() => addFoodToDrafts(food)}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm active:bg-gray-50"
+                        >
+                          <span className="truncate font-medium">{food.name}</span>
+                          <span className="shrink-0 pl-2 text-xs text-gray-500">
+                            {Math.round(food.calories)}kcal/100g
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
-              </ul>
+
+                {/*
+                  食品マスタは約 30 品目しかないので、載っていない食材や料理のほうが多い。
+                  その場合に「見つかりません」で行き止まりにせず、AI に聞けるようにする。
+                */}
+                {filteredFoods.length === 0 && (
+                  <p className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                    食品マスタにはありません。下のボタンで栄養価を調べられます。
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={estimateFood}
+                  disabled={estimating}
+                  className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-semibold active:opacity-80 disabled:opacity-40 ${
+                    filteredFoods.length === 0
+                      ? "bg-emerald-600 text-white"
+                      : "border border-emerald-600 bg-white text-emerald-700"
+                  }`}
+                >
+                  <Sparkles aria-hidden size={16} strokeWidth={2} />
+                  {estimating
+                    ? "調べています...(数秒かかります)"
+                    : `「${query.trim()}」の栄養価を調べる`}
+                </button>
+              </>
+            )}
+
+            {estimateError && (
+              <p className="mt-2 rounded-lg bg-red-50 p-2 text-xs leading-relaxed text-red-600">
+                {estimateError}
+              </p>
+            )}
+            {estimateNote && (
+              <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs leading-relaxed text-emerald-700">
+                {estimateNote}
+              </p>
             )}
           </div>
         )}

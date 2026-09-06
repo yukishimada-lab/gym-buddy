@@ -9,6 +9,7 @@ import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
 import HelpButton from "@/components/HelpButton";
 import RestTimerBar, { useRestTimer } from "@/components/RestTimerBar";
+import ExercisePicker from "@/components/ExercisePicker";
 import { GripVertical, NotebookPen, StickyNote, Timer } from "lucide-react";
 import {
   formatDateLabel,
@@ -1191,20 +1192,13 @@ function RecordPage() {
           </p>
         ) : (
           <form onSubmit={addLog}>
-            <select
-              value={exerciseId}
-              onChange={(e) => setExerciseId(e.target.value)}
-              required
-              className="mb-3 w-full rounded-lg border border-gray-300 px-3 py-2"
-            >
-              <option value="">種目を選択</option>
-              {exercises.map((ex) => (
-                <option key={ex.id} value={ex.id}>
-                  {ex.muscle_group ? `[${ex.muscle_group}] ` : ""}
-                  {ex.name}
-                </option>
-              ))}
-            </select>
+            <div data-tour="record-exercise">
+              <ExercisePicker
+                exercises={exercises}
+                value={exerciseId}
+                onChange={setExerciseId}
+              />
+            </div>
 
             <div data-tour="record-sets">
               <SetInputList sets={newSets} onChange={setNewSets} idPrefix="new" />

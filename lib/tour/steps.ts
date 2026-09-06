@@ -68,6 +68,12 @@ const RECORD: TourStep[] = [
       "種目を選んで「追加する」を押すと、この日の記録に加わります。種目は「種目」タブで増やせます。",
   },
   {
+    target: "record-exercise",
+    title: "種目の探しかた",
+    description:
+      "部位のボタンで絞り込むか、検索ボックスに名前の一部を入れると候補が減ります。選ぶと一覧はたたまれます。",
+  },
+  {
     target: "record-sets",
     title: "セットごとに入力",
     description:
@@ -111,6 +117,12 @@ const MEALS: TourStep[] = [
     title: "入力方法は 4 つ",
     description:
       "マイ商品・食品から・写真から・外食検索を切り替えられます。使いやすいものでどうぞ。",
+  },
+  {
+    target: "meals-mode-master",
+    title: "食品名で調べる",
+    description:
+      "「豚バラ」「ピザトースト」のように名前を入れて調べると、栄養価が下書きに入ります。一覧に無い食品でも大丈夫です。",
   },
   {
     target: "meals-mode-photo",

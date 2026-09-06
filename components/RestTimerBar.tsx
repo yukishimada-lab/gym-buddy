@@ -28,7 +28,18 @@ import {
   saveRestSettings,
   saveSession,
 } from "@/lib/restTimer";
-import { isAudioSupported, playBeep, resumeAudio, unlockAudio, vibrate } from "@/lib/restSound";
+import { MAX_SCHEDULED_SECONDS } from "@/lib/restAlarm";
+import {
+  canScheduleAlarm,
+  isAudioSupported,
+  isScheduledAlarmActive,
+  playBeep,
+  resumeAudio,
+  startScheduledAlarm,
+  stopScheduledAlarm,
+  unlockAudio,
+  vibrate,
+} from "@/lib/restSound";
 
 /** 表示を更新する間隔。秒表示なので細かすぎなくてよい。 */
 const TICK_MS = 200;
@@ -92,10 +103,13 @@ export function useRestTimer() {
       const t = Date.now();
       setNow(t);
       const left = endsAt - t;
+      // 予約再生(画面ロック対応)が動いているときは、音声側が予定どおり
+      // 鳴らしてくれるので、ここで重ねて鳴らさない
+      const scheduled = isScheduledAlarmActive();
       if (left <= 0) {
         if (!firedRef.current) {
           firedRef.current = true;
-          if (soundOn) playBeep("finish");
+          if (soundOn && !scheduled) playBeep("finish");
           vibrate([200, 100, 200, 100, 400]);
         }
         return;
@@ -103,7 +117,7 @@ export function useRestTimer() {
       const secondsLeft = Math.ceil(left / 1000);
       if (secondsLeft <= 3 && tickedSecondRef.current !== secondsLeft) {
         tickedSecondRef.current = secondsLeft;
-        if (soundOn) playBeep("tick");
+        if (soundOn && !scheduled) playBeep("tick");
       }
     };
     onTick();
@@ -166,6 +180,27 @@ export function useRestTimer() {
     saveSession(next);
   }, []);
 
+  /**
+   * 画面ロック中でも鳴らすための予約再生を仕掛け直す。
+   *
+   * **必ずタップ操作の中から呼ぶこと。** 操作なしの再生は端末に拒否される。
+   * 条件を満たさない場合(音オフ / 設定オフ / 長すぎる休憩)は止めるだけで、
+   * その場合は従来どおり画面が点いているあいだに鳴らす方式で動く。
+   */
+  const armAlarm = useCallback(
+    (remainingSeconds: number, exerciseName: string) => {
+      if (!settings.sound || !settings.lockScreen) {
+        stopScheduledAlarm();
+        return;
+      }
+      startScheduledAlarm(remainingSeconds, exerciseName);
+    },
+    [settings.sound, settings.lockScreen]
+  );
+
+  /** 画面から離れるときは音声を止めて後片付けする */
+  useEffect(() => stopScheduledAlarm, []);
+
   /** その種目に覚えさせてある休憩時間 */
   const secondsForExercise = useCallback(
     (exerciseId: string | null) => restSecondsFor(secondsMap, exerciseId),
@@ -189,8 +224,9 @@ export function useRestTimer() {
         endsAt: Date.now() + durationSec * 1000,
         pausedMs: null,
       });
+      armAlarm(durationSec, exerciseName);
     },
-    [secondsMap, persist]
+    [secondsMap, persist, armAlarm]
   );
 
   /** フォーム送信のように非同期処理をはさむ場合、先に呼んで音の許可だけ取っておく */
@@ -201,61 +237,61 @@ export function useRestTimer() {
   const stop = useCallback(() => {
     tickedSecondRef.current = null;
     firedRef.current = false;
+    stopScheduledAlarm();
     persist(null);
   }, [persist]);
 
   const pause = useCallback(() => {
-    setSession((prev) => {
-      if (!prev || prev.endsAt == null) return prev;
-      const next: RestSession = {
-        ...prev,
-        endsAt: null,
-        pausedMs: Math.max(0, prev.endsAt - Date.now()),
-      };
-      saveSession(next);
-      return next;
+    if (!session || session.endsAt == null) return;
+    stopScheduledAlarm();
+    persist({
+      ...session,
+      endsAt: null,
+      pausedMs: Math.max(0, session.endsAt - Date.now()),
     });
-  }, []);
+  }, [session, persist]);
 
   const resume = useCallback(() => {
     unlockAudio();
-    setSession((prev) => {
-      if (!prev || prev.endsAt != null) return prev;
-      const next: RestSession = {
-        ...prev,
-        endsAt: Date.now() + (prev.pausedMs ?? 0),
-        pausedMs: null,
-      };
-      saveSession(next);
-      return next;
+    if (!session || session.endsAt != null) return;
+    const remainingMs = session.pausedMs ?? 0;
+    persist({
+      ...session,
+      endsAt: Date.now() + remainingMs,
+      pausedMs: null,
     });
     setNow(Date.now());
-  }, []);
+    armAlarm(remainingMs / 1000, session.exerciseName);
+  }, [session, persist, armAlarm]);
 
   /** 「+30秒」など。終了後に押したときは、そこから測り直す。 */
   const addSeconds = useCallback(
     (delta: number) => {
       unlockAudio();
-      setSession((prev) => {
-        if (!prev) return prev;
-        if (prev.endsAt == null) {
-          const next = {
-            ...prev,
-            pausedMs: Math.max(0, (prev.pausedMs ?? 0) + delta * 1000),
-          };
-          saveSession(next);
-          return next;
-        }
-        const base = Math.max(Date.now(), prev.endsAt);
-        const next = { ...prev, endsAt: base + delta * 1000 };
-        saveSession(next);
-        return next;
-      });
+      if (!session) return;
+      let next: RestSession;
+      if (session.endsAt == null) {
+        // 一時停止中は残り時間そのものを増やす
+        next = {
+          ...session,
+          pausedMs: Math.max(0, (session.pausedMs ?? 0) + delta * 1000),
+        };
+      } else {
+        // 終了後に押したときは、そこから測り直す
+        const base = Math.max(Date.now(), session.endsAt);
+        next = { ...session, endsAt: base + delta * 1000 };
+      }
+      persist(next);
       tickedSecondRef.current = null;
       firedRef.current = false;
       setNow(Date.now());
+      if (next.endsAt != null) {
+        armAlarm((next.endsAt - Date.now()) / 1000, next.exerciseName);
+      } else {
+        stopScheduledAlarm();
+      }
     },
-    []
+    [session, persist, armAlarm]
   );
 
   /** この種目の休憩時間を変更して、次回以降も同じ長さで始める */
@@ -268,22 +304,24 @@ export function useRestTimer() {
         if (!current) return prev;
         return saveRestSecondsFor(prev, current.exerciseId, durationSec);
       });
-      setSession((prev) => {
-        if (!prev) return prev;
-        const next: RestSession = {
-          ...prev,
-          durationSec,
-          endsAt: prev.endsAt != null ? Date.now() + durationSec * 1000 : null,
-          pausedMs: prev.endsAt != null ? null : durationSec * 1000,
-        };
-        saveSession(next);
-        return next;
-      });
+      if (!session) return;
+      const next: RestSession = {
+        ...session,
+        durationSec,
+        endsAt: session.endsAt != null ? Date.now() + durationSec * 1000 : null,
+        pausedMs: session.endsAt != null ? null : durationSec * 1000,
+      };
+      persist(next);
       tickedSecondRef.current = null;
       firedRef.current = false;
       setNow(Date.now());
+      if (next.endsAt != null) {
+        armAlarm(durationSec, next.exerciseName);
+      } else {
+        stopScheduledAlarm();
+      }
     },
-    [session]
+    [session, persist, armAlarm]
   );
 
   /** 同じ長さでもう一度 */
@@ -292,13 +330,25 @@ export function useRestTimer() {
     start(session.exerciseId, session.exerciseName, session.durationSec);
   }, [session, start]);
 
-  const updateSettings = useCallback((patch: Partial<RestSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
+  const updateSettings = useCallback(
+    (patch: Partial<RestSettings>) => {
+      const next = { ...settings, ...patch };
+      setSettings(next);
       saveRestSettings(next);
-      return next;
-    });
-  }, []);
+
+      // 設定を切り替えたタップの中でなら、予約再生を仕掛け直せる
+      // (あとから仕掛けようとしても、操作なしの再生は端末に拒否される)
+      if (session?.endsAt != null && next.sound && next.lockScreen) {
+        startScheduledAlarm(
+          (session.endsAt - Date.now()) / 1000,
+          session.exerciseName
+        );
+      } else {
+        stopScheduledAlarm();
+      }
+    },
+    [settings, session]
+  );
 
   return {
     session,
@@ -521,6 +571,27 @@ export default function RestTimerBar({
                   timer.updateSettings({ autoStart: e.target.checked })
                 }
                 className="h-5 w-5 accent-emerald-400"
+              />
+            </label>
+
+            <label className="mt-2 flex items-center justify-between gap-3 text-xs">
+              <span className="min-w-0">
+                画面が消えても鳴らす
+                <span className="mt-0.5 block text-[11px] leading-relaxed text-white/60">
+                  {settings.lockScreen && !canScheduleAlarm(session.durationSec)
+                    ? `${Math.floor(
+                        MAX_SCHEDULED_SECONDS / 60
+                      )}分より長い休憩では使えません(画面が点いていれば鳴ります)`
+                    : "ロック画面にも残り時間が出ます。音楽アプリの再生は止まります"}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.lockScreen}
+                onChange={(e) =>
+                  timer.updateSettings({ lockScreen: e.target.checked })
+                }
+                className="h-5 w-5 shrink-0 accent-emerald-400"
               />
             </label>
 

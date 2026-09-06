@@ -11,6 +11,12 @@ import {
   parseJsonFromText,
   toNonNegativeNumber,
 } from "@/lib/gemini";
+import { restaurantCacheKey } from "@/lib/nutritionCache";
+import {
+  readNutritionCache,
+  touchNutritionCache,
+  writeNutritionCache,
+} from "@/lib/nutritionCacheStore";
 
 // Google 検索グラウンディングは時間がかかることがあるため上限を延長
 export const maxDuration = 60;
@@ -20,8 +26,15 @@ const LABEL = "restaurant-search";
 /**
  * POST /api/meals/restaurant-search
  * body: { restaurant: string, menu: string }
- * 店名+メニュー名から、公式に公開されている栄養成分情報を
- * Gemini の Google 検索グラウンディングで検索・抽出して返す。
+ *
+ * 店名+メニュー名から、公式に公開されている栄養成分情報を返す。
+ *
+ * 1. まず nutrition_cache(過去に誰かが調べた結果)を引く。
+ *    外食チェーンのメニューの栄養成分は頻繁には変わらないので、
+ *    2 回目以降はネット検索せずここから即座に返せる。
+ * 2. 無ければ Gemini の Google 検索グラウンディングで調べ、結果を保存する。
+ *
+ * 使うほどキャッシュが育ち、速く・安く・つながりにくい場所でも動くようになる。
  */
 export async function POST(request: Request) {
   // ログインユーザーのみ利用可(API キーの悪用防止)
@@ -36,15 +49,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const ai = getGeminiClient();
-  if (!ai) {
-    console.error(`[gemini] ${LABEL} aborted: GEMINI_API_KEY is not set`);
-    return NextResponse.json(
-      { error: GEMINI_NOT_CONFIGURED_MESSAGE, code: "NOT_CONFIGURED" },
-      { status: 503 }
-    );
-  }
-
   let restaurant: string;
   let menu: string;
   try {
@@ -56,6 +60,38 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "店名とメニュー名を入力してください。" },
       { status: 400 }
+    );
+  }
+
+  const cacheKey = restaurantCacheKey(restaurant, menu);
+
+  // 1. 過去に調べた結果があればネット検索せずに返す
+  const cached = await readNutritionCache(supabase, "restaurant", cacheKey);
+  if (cached) {
+    void touchNutritionCache(supabase, cached.id);
+    console.log(`[cache] ${LABEL} hit key=${cacheKey}`);
+    return NextResponse.json({
+      found: true,
+      cached: true,
+      item: {
+        food_name: cached.display_name,
+        amount_g: cached.serving_g,
+        protein_g: cached.protein_g,
+        fat_g: cached.fat_g,
+        carbs_g: cached.carbs_g,
+        calories: cached.calories,
+      },
+      note: cached.note,
+    });
+  }
+
+  // 2. 無ければ AI に検索してもらう
+  const ai = getGeminiClient();
+  if (!ai) {
+    console.error(`[gemini] ${LABEL} aborted: GEMINI_API_KEY is not set`);
+    return NextResponse.json(
+      { error: GEMINI_NOT_CONFIGURED_MESSAGE, code: "NOT_CONFIGURED" },
+      { status: 503 }
     );
   }
 
@@ -105,21 +141,39 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json({
-      found: true,
-      item: {
-        food_name:
-          typeof parsed.food_name === "string" && parsed.food_name.trim()
-            ? parsed.food_name.slice(0, 100)
-            : `${restaurant} ${menu}`,
-        amount_g: null,
-        protein_g: toNonNegativeNumber(parsed.protein_g),
-        fat_g: toNonNegativeNumber(parsed.fat_g),
-        carbs_g: toNonNegativeNumber(parsed.carbs_g),
-        calories: toNonNegativeNumber(parsed.calories),
-      },
-      note: typeof parsed.note === "string" ? parsed.note.slice(0, 300) : null,
+    const displayName =
+      typeof parsed.food_name === "string" && parsed.food_name.trim()
+        ? parsed.food_name.slice(0, 100)
+        : `${restaurant} ${menu}`;
+    const note =
+      typeof parsed.note === "string" ? parsed.note.slice(0, 300) : null;
+    const item = {
+      food_name: displayName,
+      // 外食の栄養成分は「1 食あたり」で公開されている。グラム数は普通ぶら下がって
+      // いないので null(ユーザーが必要なら手で入れる)。
+      amount_g: null,
+      protein_g: toNonNegativeNumber(parsed.protein_g),
+      fat_g: toNonNegativeNumber(parsed.fat_g),
+      carbs_g: toNonNegativeNumber(parsed.carbs_g),
+      calories: toNonNegativeNumber(parsed.calories),
+    };
+
+    // 3. 次に誰かが同じメニューを調べたとき、検索せずに返せるよう保存する
+    void writeNutritionCache(supabase, {
+      kind: "restaurant",
+      cache_key: cacheKey,
+      display_name: displayName,
+      protein_g: item.protein_g,
+      fat_g: item.fat_g,
+      carbs_g: item.carbs_g,
+      calories: item.calories,
+      serving_g: null,
+      note,
+      source: "ai_search",
+      created_by: user.id,
     });
+
+    return NextResponse.json({ found: true, cached: false, item, note });
   } catch (e) {
     const failure = describeGeminiError(e);
     console.error(`[gemini] ${LABEL} responding ${failure.status} ${failure.code}`);

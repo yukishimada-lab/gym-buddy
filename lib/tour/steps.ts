@@ -119,6 +119,12 @@ const MEALS: TourStep[] = [
       "マイ商品・食品から・写真から・外食検索を切り替えられます。使いやすいものでどうぞ。",
   },
   {
+    target: "meals-mode-master",
+    title: "食品名で調べる",
+    description:
+      "「豚バラ」「ピザトースト」のように名前を入れて調べると、栄養価が下書きに入ります。一覧に無い食品でも大丈夫です。",
+  },
+  {
     target: "meals-mode-photo",
     title: "写真から自動で入れる",
     description:

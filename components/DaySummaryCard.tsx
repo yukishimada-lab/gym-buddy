@@ -112,6 +112,7 @@ function SetRow({
   set,
   weighted,
   ratio,
+  compact,
 }: {
   index: number;
   set: WorkoutSet;
@@ -119,25 +120,28 @@ function SetRow({
   weighted: boolean;
   /** 帯の長さ(0〜1) */
   ratio: number;
+  /** 2 列に組む日は、幅が半分になるので列を減らす */
+  compact: boolean;
 }) {
   const weight = Number(set.weight_kg);
   const reps = Number(set.reps);
   const volume = weight * reps;
+  const barWidth = compact ? 46 : 116;
 
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "6px 0",
+        gap: compact ? 8 : 10,
+        padding: compact ? "3px 0" : "6px 0",
       }}
     >
       <span
         style={{
-          width: 36,
+          width: compact ? 30 : 36,
           flexShrink: 0,
-          fontSize: 12,
+          fontSize: compact ? 11 : 12,
           fontWeight: 700,
           color: VIZ.muted,
           fontVariantNumeric: "tabular-nums",
@@ -150,7 +154,7 @@ function SetRow({
       <span
         style={{
           flex: 1,
-          fontSize: 16,
+          fontSize: compact ? 14 : 16,
           fontWeight: 600,
           color: VIZ.textPrimary,
           fontVariantNumeric: "tabular-nums",
@@ -162,9 +166,9 @@ function SetRow({
       {/* 量の目安。トラックは同じ色の薄い段(dataviz のメーター指定) */}
       <div
         style={{
-          width: 116,
+          width: barWidth,
           flexShrink: 0,
-          height: 5,
+          height: compact ? 4 : 5,
           borderRadius: 4,
           backgroundColor: VIZ.series1Tint,
           overflow: "hidden",
@@ -173,7 +177,7 @@ function SetRow({
         <div
           style={{
             width: `${Math.max(2, Math.round(ratio * 100))}%`,
-            height: 5,
+            height: compact ? 4 : 5,
             // 始点は基準線にそろえ、データ側の端だけ丸める
             borderRadius: "0 4px 4px 0",
             backgroundColor: VIZ.series1,
@@ -182,19 +186,23 @@ function SetRow({
       </div>
 
       {/* 重量がある種目だけ、そのセットのボリュームを出す。
-          自重種目でも枠は残して、行ごとに列がずれないようにする */}
-      <span
-        style={{
-          width: 66,
-          flexShrink: 0,
-          textAlign: "right",
-          fontSize: 13,
-          color: VIZ.textSecondary,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {weighted ? `${formatNumber(volume)}kg` : ""}
-      </span>
+          自重種目でも枠は残して、行ごとに列がずれないようにする。
+          2 列に組む日は幅が足りないので、この列は出さない
+          (種目ごとの合計はカードの下に出ている) */}
+      {!compact && (
+        <span
+          style={{
+            width: 66,
+            flexShrink: 0,
+            textAlign: "right",
+            fontSize: 13,
+            color: VIZ.textSecondary,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {weighted ? `${formatNumber(volume)}kg` : ""}
+        </span>
+      )}
     </div>
   );
 }
@@ -306,6 +314,15 @@ export default function DaySummaryCard({
   const dayVolume = totalVolume(allSets);
 
   const hasWorkout = allLogs.length > 0;
+
+  /**
+   * 種目が多い日は、種目カードを 2 列に組む。
+   *
+   * 1 列のままだと画像が縦に伸びすぎて、スマホの写真アプリで
+   * 1 画面に収まらなくなる(9 種目で縦 2,600px を超えていた)。
+   * 2 列にすると、同じ内容のまま縦がおよそ半分になる。
+   */
+  const compact = allLogs.length >= 4;
   const hasMeals = meals.length > 0;
   const bodyStats = body
     ? [
@@ -402,7 +419,12 @@ export default function DaySummaryCard({
       }}
     >
       {/* ── 見出し帯(濃い面)──────────────────────── */}
-      <div style={{ backgroundColor: INK, padding: "30px 32px 26px" }}>
+      <div
+        style={{
+          backgroundColor: INK,
+          padding: compact ? "26px 26px 22px" : "30px 32px 26px",
+        }}
+      >
         <div
           style={{
             display: "flex",
@@ -473,14 +495,14 @@ export default function DaySummaryCard({
       </div>
 
       {/* ── 本文 ─────────────────────────────── */}
-      <div style={{ flex: 1, padding: "26px 32px 0" }}>
+      <div style={{ flex: 1, padding: compact ? "22px 26px 0" : "26px 32px 0" }}>
         {/* トレーニング(記録がある日だけ) */}
         {hasWorkout && (
           <div style={{ marginBottom: 26 }}>
             <SectionHeading color={VIZ.series1} label="トレーニング" />
 
             {sections.map((section) => (
-              <div key={section.group} style={{ marginBottom: 18 }}>
+              <div key={section.group} style={{ marginBottom: compact ? 12 : 18 }}>
                 {/* 部位の見出し。色ではなく文字と罫線で区別する */}
                 <div
                   style={{
@@ -500,7 +522,15 @@ export default function DaySummaryCard({
                   </span>
                 </div>
 
-                {section.items.map((log) => {
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    alignItems: "stretch",
+                  }}
+                >
+                  {section.items.map((log) => {
                   const sets = sortSets(log.workout_sets ?? []);
                   const weighted = hasWeight(sets);
                   // 帯の基準は、その種目の中でいちばん大きいセット
@@ -515,10 +545,14 @@ export default function DaySummaryCard({
                     <div
                       key={log.id}
                       style={{
+                        // 2 列に組む日は半分の幅。gap のぶんだけ引いておく
+                        width: compact ? "calc(50% - 4px)" : "100%",
+                        boxSizing: "border-box",
                         backgroundColor: SURFACE_SOFT,
                         borderRadius: 14,
-                        padding: "14px 16px",
-                        marginBottom: 8,
+                        padding: compact ? "12px 14px" : "14px 16px",
+                        display: "flex",
+                        flexDirection: "column",
                       }}
                     >
                       <div
@@ -529,7 +563,13 @@ export default function DaySummaryCard({
                           gap: 12,
                         }}
                       >
-                        <span style={{ fontSize: 17, fontWeight: 700 }}>
+                        <span
+                          style={{
+                            fontSize: compact ? 15 : 17,
+                            fontWeight: 700,
+                            lineHeight: 1.35,
+                          }}
+                        >
                           {log.exercises?.name ?? "(削除された種目)"}
                         </span>
                         {/* 数値は文字色で書き、色は面(タグの地)だけが持つ */}
@@ -539,8 +579,8 @@ export default function DaySummaryCard({
                             backgroundColor: VIZ.series1Tint,
                             color: VIZ.textPrimary,
                             borderRadius: 999,
-                            padding: "4px 12px",
-                            fontSize: 13,
+                            padding: compact ? "3px 9px" : "4px 12px",
+                            fontSize: compact ? 12 : 13,
                             fontWeight: 700,
                             whiteSpace: "nowrap",
                           }}
@@ -562,7 +602,7 @@ export default function DaySummaryCard({
                           セット未入力
                         </div>
                       ) : (
-                        <div style={{ marginTop: 8 }}>
+                        <div style={{ marginTop: compact ? 6 : 8, marginBottom: compact ? 8 : 10 }}>
                           {sets.map((set, i) => (
                             <SetRow
                               key={set.id}
@@ -570,6 +610,7 @@ export default function DaySummaryCard({
                               set={set}
                               weighted={weighted}
                               ratio={values[i] / peak}
+                              compact={compact}
                             />
                           ))}
                         </div>
@@ -578,10 +619,9 @@ export default function DaySummaryCard({
                       {/* その種目の合計 */}
                       <div
                         style={{
-                          marginTop: 10,
-                          paddingTop: 10,
+                          paddingTop: compact ? 8 : 10,
                           borderTop: `1px solid ${VIZ.grid}`,
-                          fontSize: 13,
+                          fontSize: compact ? 12 : 13,
                           color: VIZ.textSecondary,
                         }}
                       >
@@ -597,10 +637,10 @@ export default function DaySummaryCard({
                           style={{
                             display: "flex",
                             gap: 8,
-                            marginTop: 10,
+                            marginTop: compact ? 8 : 10,
                             paddingLeft: 10,
                             borderLeft: `3px solid ${VIZ.axis}`,
-                            fontSize: 13,
+                            fontSize: compact ? 12 : 13,
                             lineHeight: 1.6,
                             color: VIZ.textSecondary,
                             whiteSpace: "pre-wrap",
@@ -618,7 +658,8 @@ export default function DaySummaryCard({
                       )}
                     </div>
                   );
-                })}
+                  })}
+                </div>
               </div>
             ))}
           </div>
@@ -707,8 +748,8 @@ export default function DaySummaryCard({
       {/* ── フッター ─────────────────────────── */}
       <div
         style={{
-          margin: "0 32px",
-          padding: "16px 0 26px",
+          margin: compact ? "0 26px" : "0 32px",
+          padding: compact ? "14px 0 20px" : "16px 0 26px",
           borderTop: `1px solid ${VIZ.grid}`,
           fontSize: 13,
           color: VIZ.muted,

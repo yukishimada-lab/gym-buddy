@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { isMissingColumnError } from "@/lib/supabase/errors";
 import SortableList from "@/components/SortableList";
 import SetInputList, { nextSet } from "@/components/SetInputList";
 import TrendBadges from "@/components/TrendBadges";
@@ -411,7 +412,8 @@ function RecordPage() {
       .from("workout_logs")
       .update({ is_planned: false })
       .eq("id", log.id);
-    if (updateError) {
+    // 列がまだ無い環境では、そもそも予定の印が付かないので何もしなくてよい
+    if (updateError && !isMissingColumnError(updateError)) {
       setError(`更新に失敗しました: ${updateError.message}`);
     }
     await loadLogs(date);
@@ -455,6 +457,7 @@ function RecordPage() {
       setError(`更新に失敗しました: ${insError.message}`);
     } else {
       // 数値を保存した = 実際にやった記録になった
+      // (列がまだ無い環境ではエラーになるが、予定の印も付かないので無視してよい)
       if (target?.is_planned) {
         await supabase
           .from("workout_logs")
@@ -600,18 +603,24 @@ function RecordPage() {
     setError(null);
     const supabase = createClient();
 
-    const { error: logsError } = await supabase.from("workout_logs").insert(
-      snapshot.logs.map((l) => ({
-        id: l.id,
-        user_id: l.user_id,
-        workout_date: l.workout_date,
-        exercise_id: l.exercise_id,
-        memo: l.memo,
-        sort_order: l.sort_order,
-        is_planned: l.is_planned,
-        created_at: l.created_at,
-      }))
+    const restoreRows = snapshot.logs.map((l) => ({
+      id: l.id,
+      user_id: l.user_id,
+      workout_date: l.workout_date,
+      exercise_id: l.exercise_id,
+      memo: l.memo,
+      sort_order: l.sort_order,
+      created_at: l.created_at,
+    }));
+
+    let { error: logsError } = await supabase.from("workout_logs").insert(
+      snapshot.logs.map((l, i) => ({ ...restoreRows[i], is_planned: l.is_planned }))
     );
+    if (logsError && isMissingColumnError(logsError)) {
+      ({ error: logsError } = await supabase
+        .from("workout_logs")
+        .insert(restoreRows));
+    }
     if (logsError) {
       setError(`元に戻せませんでした: ${logsError.message}`);
       await loadLogs(date);
@@ -775,14 +784,18 @@ function RecordPage() {
 
     const maxOrder = logs.reduce((m, l) => Math.max(m, l.sort_order), 0);
 
-    const { data: inserted, error: insertError } = await supabase
+    const newLogRows = items.map((item, index) => ({
+      user_id: user.id,
+      workout_date: date,
+      exercise_id: item.exercise_id,
+      sort_order: maxOrder + index + 1,
+    }));
+
+    let { data: inserted, error: insertError } = await supabase
       .from("workout_logs")
       .insert(
-        items.map((item, index) => ({
-          user_id: user.id,
-          workout_date: date,
-          exercise_id: item.exercise_id,
-          sort_order: maxOrder + index + 1,
+        newLogRows.map((row) => ({
+          ...row,
           // 展開しただけの時点では「まだやっていない予定」。
           // 中身は前回の記録やルーティンの目標値なので、
           // 実際の記録と同じ見た目にならないよう印を付けておく
@@ -790,6 +803,16 @@ function RecordPage() {
         }))
       )
       .select("id, exercise_id, sort_order");
+
+    // is_planned の列がまだ本番に無い場合(マイグレーション待ち)は、
+    // 印なしで入れ直す。展開そのものが失敗するのは避ける。
+    if (insertError && isMissingColumnError(insertError)) {
+      console.warn("[workout] is_planned がまだ無いため、印なしで展開します");
+      ({ data: inserted, error: insertError } = await supabase
+        .from("workout_logs")
+        .insert(newLogRows)
+        .select("id, exercise_id, sort_order"));
+    }
 
     if (insertError || !inserted) {
       setError(

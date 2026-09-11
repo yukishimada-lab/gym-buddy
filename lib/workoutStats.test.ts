@@ -10,6 +10,7 @@ import {
   hasWeight,
   maxWeight,
   memoText,
+  sameSets,
   sortSets,
   summarize,
   summaryLine,
@@ -270,5 +271,32 @@ describe("toSetRows(入力欄 → DB)", () => {
       weight_kg: "",
       reps: "10",
     });
+  });
+});
+
+describe("sameSets", () => {
+  it("セット数・重量・回数がすべて同じなら true", () => {
+    expect(sameSets(SETS, [set(80, 10), set(80, 8), set(70, 8)])).toBe(true);
+  });
+
+  it("セット数が違えば false", () => {
+    expect(sameSets(SETS, [set(80, 10), set(80, 8)])).toBe(false);
+  });
+
+  it("1 つでも重量か回数が違えば false", () => {
+    expect(sameSets(SETS, [set(80, 10), set(80, 8), set(70, 9)])).toBe(false);
+    expect(sameSets(SETS, [set(80, 10), set(82.5, 8), set(70, 8)])).toBe(false);
+  });
+
+  it("数値と文字列が混ざっていても同じ値なら true(入力途中の値と比べるため)", () => {
+    expect(sameSets([set("80", "10")], [set(80, 10)])).toBe(true);
+  });
+
+  it("空欄と 0 は同じ扱い(どちらも「入力なし」)", () => {
+    expect(sameSets([set("", "10")], [set(0, 10)])).toBe(true);
+  });
+
+  it("どちらも空なら true", () => {
+    expect(sameSets([], [])).toBe(true);
   });
 });

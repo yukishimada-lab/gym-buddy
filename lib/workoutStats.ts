@@ -204,6 +204,24 @@ export function formatSets(sets: SetLike[]): string {
 }
 
 /**
+ * 2 つのセット列がまったく同じ内容か(セット数・各セットの重量と回数)。
+ *
+ * ルーティンを展開したときの初期値が「前回の記録そのまま」なのか
+ * 「ルーティンの目標値」なのかを見分けるのに使う。
+ * どちらから入ったかは DB に持っていないので、中身を突き合わせて判断する。
+ */
+export function sameSets(a: SetLike[], b: SetLike[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((set, i) => {
+    const other = b[i];
+    return (
+      (Number(set.weight_kg) || 0) === (Number(other.weight_kg) || 0) &&
+      (Number(set.reps) || 0) === (Number(other.reps) || 0)
+    );
+  });
+}
+
+/**
  * DB のセットを入力フォーム用の文字列に変換する。
  *
  * 0 は「入力しなかった」という意味で保存されている(自重種目や、

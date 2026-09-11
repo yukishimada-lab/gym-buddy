@@ -12,6 +12,12 @@ import { useRestTimerContext } from "@/components/RestTimerProvider";
 import ExercisePicker from "@/components/ExercisePicker";
 import { GripVertical, NotebookPen, StickyNote, Timer } from "lucide-react";
 import {
+  PLANNED_CARD_CLASS,
+  PlannedBadge,
+  PlannedNotice,
+  RECORD_CARD_CLASS,
+} from "@/components/PlannedRecord";
+import {
   formatDateLabel,
   formatShortDateLabel,
   todayString,
@@ -26,6 +32,7 @@ import {
   hasWeight,
   maxWeight,
   memoText,
+  sameSets,
   sortLogs,
   sortSets,
   toSetInputs,
@@ -128,7 +135,14 @@ function RestButton({
 }
 
 /** セットの一覧(「1set 80kg × 10回」)。通常表示と選択モードで共通に使う */
-function SetLines({ sets }: { sets: WorkoutSet[] }) {
+function SetLines({
+  sets,
+  /** まだやっていない予定の値は薄く出して、実際の記録と見分けられるようにする */
+  planned = false,
+}: {
+  sets: WorkoutSet[];
+  planned?: boolean;
+}) {
   if (sets.length === 0) {
     return <p className="mt-1 text-sm text-gray-400">セットが未入力です</p>;
   }
@@ -142,7 +156,9 @@ function SetLines({ sets }: { sets: WorkoutSet[] }) {
           >
             {i + 1}set
           </span>
-          <span className="tabular-nums text-gray-700">
+          <span
+            className={`tabular-nums ${planned ? "text-gray-400" : "text-gray-700"}`}
+          >
             {Number(s.weight_kg) > 0 ? (
               <>{formatWeight(Number(s.weight_kg))}kg × </>
             ) : (
@@ -381,6 +397,27 @@ function RecordPage() {
     setEditSets(inputs.length > 0 ? inputs : [nextSet([])]);
   };
 
+  /**
+   * 展開しただけの記録を「この内容で実施した」ことにする。
+   *
+   * 前回とまったく同じ内容でやった日は数値を打ち直す必要がないので、
+   * 1 タップで確定できるようにしておく。
+   */
+  const confirmPlanned = async (log: WorkoutLogWithExercise) => {
+    setSaving(true);
+    setError(null);
+    const supabase = createClient();
+    const { error: updateError } = await supabase
+      .from("workout_logs")
+      .update({ is_planned: false })
+      .eq("id", log.id);
+    if (updateError) {
+      setError(`更新に失敗しました: ${updateError.message}`);
+    }
+    await loadLogs(date);
+    setSaving(false);
+  };
+
   const saveEdit = async () => {
     if (!editId) return;
     if (editSets.length === 0) {
@@ -417,6 +454,13 @@ function RecordPage() {
     if (insError) {
       setError(`更新に失敗しました: ${insError.message}`);
     } else {
+      // 数値を保存した = 実際にやった記録になった
+      if (target?.is_planned) {
+        await supabase
+          .from("workout_logs")
+          .update({ is_planned: false })
+          .eq("id", editId);
+      }
       setEditId(null);
       if (addedSet && target && timer.settings.autoStart) {
         timer.start(target.exercise_id, exerciseName(target));
@@ -564,6 +608,7 @@ function RecordPage() {
         exercise_id: l.exercise_id,
         memo: l.memo,
         sort_order: l.sort_order,
+        is_planned: l.is_planned,
         created_at: l.created_at,
       }))
     );
@@ -738,6 +783,10 @@ function RecordPage() {
           workout_date: date,
           exercise_id: item.exercise_id,
           sort_order: maxOrder + index + 1,
+          // 展開しただけの時点では「まだやっていない予定」。
+          // 中身は前回の記録やルーティンの目標値なので、
+          // 実際の記録と同じ見た目にならないよう印を付けておく
+          is_planned: true,
         }))
       )
       .select("id, exercise_id, sort_order");
@@ -992,6 +1041,7 @@ function RecordPage() {
                 sets,
                 previous.get(log.exercise_id) ?? null
               );
+              const prevRecord = previous.get(log.exercise_id) ?? null;
               const isEditing = editId === log.id;
               const isMemoEditing = memoEditId === log.id;
               const memo = memoText(log.memo);
@@ -1000,8 +1050,11 @@ function RecordPage() {
               return (
                 <div
                   data-tour="record-card"
-                  className="rounded-xl bg-white p-3 shadow-sm"
+                  className={
+                    log.is_planned ? PLANNED_CARD_CLASS : RECORD_CARD_CLASS
+                  }
                 >
+                  {log.is_planned && <PlannedBadge />}
                   {isEditing ? (
                     <div>
                       <div className="mb-2 flex items-center justify-between gap-2">
@@ -1067,15 +1120,32 @@ function RecordPage() {
                       </div>
 
                       <div className="pl-9">
-                        <SetLines sets={sets} />
-                        <div data-tour="record-trend">
-                          <TrendBadges
-                            comparison={comparison}
-                            maxWeight={maxWeight(sets)}
-                            totalVolume={totalVolume(sets)}
-                            weightless={sets.length > 0 && !hasWeight(sets)}
+                        <SetLines sets={sets} planned={log.is_planned} />
+
+                        {log.is_planned ? (
+                          <PlannedNotice
+                            previousDateLabel={
+                              // 中身が前回の記録とそっくり同じときだけ
+                              // 「前回の記録を入れた」と言い切る。
+                              // そうでなければルーティンの目標値から入っている。
+                              prevRecord && sameSets(sets, prevRecord.sets)
+                                ? formatShortDateLabel(prevRecord.date)
+                                : null
+                            }
+                            onEdit={() => startEdit(log)}
+                            onConfirm={() => confirmPlanned(log)}
+                            disabled={saving}
                           />
-                        </div>
+                        ) : (
+                          <div data-tour="record-trend">
+                            <TrendBadges
+                              comparison={comparison}
+                              maxWeight={maxWeight(sets)}
+                              totalVolume={totalVolume(sets)}
+                              weightless={sets.length > 0 && !hasWeight(sets)}
+                            />
+                          </div>
+                        )}
 
                         {/* メモ(その日のその種目の書き置き) */}
                         {isMemoEditing ? (

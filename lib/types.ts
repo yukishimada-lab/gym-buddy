@@ -27,6 +27,15 @@ export type WorkoutLog = {
   sets: number;
   memo: string | null;
   sort_order: number;
+  /**
+   * true = ルーティンを展開しただけで、まだ実際にやっていない記録。
+   *
+   * 展開したときの中身は「前回の記録」か「ルーティンの目標値」なので、
+   * 実際に記録した内容と見た目が同じになってしまう。
+   * それを画面で区別するための印。数値を保存するか
+   * 「この内容で実施」を押した時点で false になる。
+   */
+  is_planned: boolean;
   created_at: string;
 };
 

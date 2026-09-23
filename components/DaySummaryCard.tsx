@@ -2,8 +2,9 @@
 
 import { StickyNote } from "lucide-react";
 import { VIZ } from "@/lib/viz";
-import { formatDateLabel } from "@/lib/date";
+import { formatDateLabel, formatShortDateLabel } from "@/lib/date";
 import {
+  compareWithPrevious,
   formatNumber,
   formatWeight,
   hasMemo,
@@ -13,6 +14,7 @@ import {
   sortSets,
   totalReps,
   totalVolume,
+  type MetricComparison,
 } from "@/lib/workoutStats";
 import type { DaySummary, MealType, WorkoutSet } from "@/lib/types";
 
@@ -207,6 +209,60 @@ function SetRow({
   );
 }
 
+/**
+ * 前回の記録と比べた増減のチップ。
+ *
+ * 伸びは青、落ちは赤にするが、色だけに頼らないよう
+ * 上下の矢印と「+2.5kg」のような符号つきの数値を必ず併記する。
+ * (画面側の TrendBadges と同じ見た目にそろえている)
+ */
+function DeltaChip({
+  label,
+  comparison,
+  unit,
+  format,
+  compact,
+}: {
+  label: string;
+  comparison: MetricComparison;
+  unit: string;
+  format: (n: number) => string;
+  compact: boolean;
+}) {
+  const style =
+    comparison.direction === "up"
+      ? { color: VIZ.up, background: VIZ.upTint, arrow: "↑" }
+      : comparison.direction === "down"
+        ? { color: VIZ.down, background: VIZ.downTint, arrow: "↓" }
+        : { color: VIZ.textSecondary, background: "#f0efec", arrow: "−" };
+
+  const text =
+    comparison.direction === "same"
+      ? "変化なし"
+      : `${comparison.delta > 0 ? "+" : "−"}${format(Math.abs(comparison.delta))}${unit}`;
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        gap: 4,
+        borderRadius: 6,
+        padding: compact ? "2px 6px" : "3px 8px",
+        fontSize: compact ? 11 : 12,
+        backgroundColor: style.background,
+        color: style.color,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span style={{ opacity: 0.85 }}>{label}</span>
+      <span style={{ fontWeight: 700 }}>
+        {style.arrow} {text}
+      </span>
+    </span>
+  );
+}
+
 /** PFC の内訳バー(積み上げ・セグメント間は 2px 空ける・直接ラベル付き) */
 function PfcBar({
   protein,
@@ -306,7 +362,7 @@ export default function DaySummaryCard({
   /** html-to-image に渡すための ref */
   innerRef?: React.Ref<HTMLDivElement>;
 }) {
-  const { sections, meals, nutrition, body } = summary;
+  const { sections, meals, nutrition, body, previous } = summary;
 
   // その日のトレーニング全体の合計(見出し帯に出す)
   const allLogs = sections.flatMap((s) => s.items);
@@ -540,6 +596,11 @@ export default function DaySummaryCard({
                       : Number(s.reps)
                   );
                   const peak = Math.max(1, ...values);
+                  // 前回の記録との比較(前回が無ければ null)
+                  const comparison = compareWithPrevious(
+                    sets,
+                    previous.get(log.exercise_id) ?? null
+                  );
 
                   return (
                     <div
@@ -616,7 +677,7 @@ export default function DaySummaryCard({
                         </div>
                       )}
 
-                      {/* その種目の合計 */}
+                      {/* その種目の合計と、前回の記録との比較 */}
                       <div
                         style={{
                           paddingTop: compact ? 8 : 10,
@@ -630,6 +691,71 @@ export default function DaySummaryCard({
                           ? ` · 総ボリューム ${formatNumber(totalVolume(sets))}kg`
                           : ` · 計 ${formatNumber(totalReps(sets))}回`}
                       </div>
+
+                      {/*
+                        前回の記録との比較。
+                        重量のある種目は「最大重量」と「総ボリューム」、
+                        自重種目は重量が 0 で変化が出ないので「回数」で見る。
+                      */}
+                      {sets.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            alignItems: "baseline",
+                            gap: 5,
+                            marginTop: 7,
+                          }}
+                        >
+                          {comparison ? (
+                            <>
+                              {weighted ? (
+                                <>
+                                  <DeltaChip
+                                    label="最大"
+                                    unit="kg"
+                                    format={formatWeight}
+                                    comparison={comparison.maxWeight}
+                                    compact={compact}
+                                  />
+                                  <DeltaChip
+                                    label="量"
+                                    unit="kg"
+                                    format={(n) => formatNumber(n)}
+                                    comparison={comparison.totalVolume}
+                                    compact={compact}
+                                  />
+                                </>
+                              ) : (
+                                <DeltaChip
+                                  label="回数"
+                                  unit="回"
+                                  format={(n) => formatNumber(n)}
+                                  comparison={comparison.totalReps}
+                                  compact={compact}
+                                />
+                              )}
+                              <span
+                                style={{
+                                  fontSize: compact ? 10 : 11,
+                                  color: VIZ.muted,
+                                }}
+                              >
+                                vs {formatShortDateLabel(comparison.previousDate)}
+                              </span>
+                            </>
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: compact ? 10 : 11,
+                                color: VIZ.muted,
+                              }}
+                            >
+                              前回の記録なし
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* その種目のメモ(あれば) */}
                       {hasMemo(log.memo) && (

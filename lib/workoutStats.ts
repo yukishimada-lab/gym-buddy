@@ -105,11 +105,18 @@ export type WorkoutComparison = {
   previousDate: string;
   maxWeight: MetricComparison;
   totalVolume: MetricComparison;
+  /**
+   * 総レップ数の比較。
+   *
+   * 自重種目(チンニングなど)は重量が 0 なので、最大重量も総ボリュームも
+   * 0 のままで変化が分からない。回数で見れば伸びているかが分かる。
+   */
+  totalReps: MetricComparison;
 };
 
 /**
  * 同じ種目の前回記録と比べる。
- * 判定は「最大重量」と「総ボリューム(重量 × 回数の合計)」の両方を見る。
+ * 「最大重量」「総ボリューム(重量 × 回数の合計)」「総レップ数」の 3 つを見る。
  * 前回記録が無ければ null(= 色を付けない)。
  */
 export function compareWithPrevious(
@@ -124,6 +131,7 @@ export function compareWithPrevious(
       totalVolume(currentSets),
       totalVolume(previous.sets)
     ),
+    totalReps: compareMetric(totalReps(currentSets), totalReps(previous.sets)),
   };
 }
 

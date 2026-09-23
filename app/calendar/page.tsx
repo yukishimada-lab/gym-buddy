@@ -16,12 +16,14 @@ import {
   type YearMonth,
 } from "@/lib/date";
 import {
+  buildPreviousRecordMap,
   formatNumber,
   hasMemo,
   memoText,
   sortLogs,
   sortSets,
   summaryLine,
+  type PreviousRecord,
 } from "@/lib/workoutStats";
 import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
 import ShareDaySummary from "@/components/ShareDaySummary";
@@ -31,6 +33,7 @@ import type {
   DaySummary,
   MealLog,
   WorkoutLogWithExercise,
+  WorkoutSet,
 } from "@/lib/types";
 
 /**
@@ -81,6 +84,10 @@ function CalendarPage() {
   });
   const [selected, setSelected] = useState<string>(initialDate);
   const [summary, setSummary] = useState<Map<string, DayMarks>>(new Map());
+  /** 種目 ID → その種目の前回の記録(共有画像の前回比に使う) */
+  const [dayPrevious, setDayPrevious] = useState<Map<string, PreviousRecord>>(
+    new Map()
+  );
   const [loadingMonth, setLoadingMonth] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -151,9 +158,36 @@ function CalendarPage() {
       supabase.from("meal_logs").select("*").eq("meal_date", date),
       supabase.from("body_logs").select("*").eq("log_date", date).maybeSingle(),
     ]);
-    setDayLogs(sortLogs((logRes.data as WorkoutLogWithExercise[]) ?? []));
+    const logs = sortLogs((logRes.data as WorkoutLogWithExercise[]) ?? []);
+    setDayLogs(logs);
     setDayMeals((mealRes.data as MealLog[]) ?? []);
     setDayBody((bodyRes.data as BodyLog | null) ?? null);
+
+    // 共有画像に「前回と比べて伸びたか」を出すため、
+    // その日にやった種目の直近の記録(この日より前)も引いておく
+    const exerciseIds = [...new Set(logs.map((l) => l.exercise_id))];
+    if (exerciseIds.length === 0) {
+      setDayPrevious(new Map());
+    } else {
+      const { data: prevData } = await supabase
+        .from("workout_logs")
+        .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+        .in("exercise_id", exerciseIds)
+        .lt("workout_date", date)
+        .order("workout_date", { ascending: false })
+        .limit(200);
+      setDayPrevious(
+        buildPreviousRecordMap(
+          (prevData as
+            | {
+                exercise_id: string;
+                workout_date: string;
+                workout_sets: WorkoutSet[] | null;
+              }[]
+            | null) ?? []
+        )
+      );
+    }
     setLoadingDay(false);
   }, []);
 
@@ -215,8 +249,9 @@ function CalendarPage() {
       meals: dayMeals,
       nutrition: mealTotal,
       body: dayBody,
+      previous: dayPrevious,
     }),
-    [selected, sections, dayMeals, mealTotal, dayBody]
+    [selected, sections, dayMeals, mealTotal, dayBody, dayPrevious]
   );
 
   const hasAnyRecord =

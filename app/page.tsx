@@ -202,6 +202,9 @@ function RecordPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [editSets, setEditSets] = useState<SetInput[]>([]);
 
+  /** セットの編集中に一緒に書けるメモ(保存すると数値と同時に保存される) */
+  const [editMemo, setEditMemo] = useState("");
+
   // メモ編集(日付 × 種目 = 記録 1 件につき 1 つ)
   const [memoEditId, setMemoEditId] = useState<string | null>(null);
   const [memoDraft, setMemoDraft] = useState("");
@@ -396,6 +399,8 @@ function RecordPage() {
     setEditId(log.id);
     const inputs = toSetInputs(log.workout_sets ?? []);
     setEditSets(inputs.length > 0 ? inputs : [nextSet([])]);
+    // 数値を直しながらメモも書けるようにする(保存は一度で済む)
+    setEditMemo(memoText(log.memo));
   };
 
   /**
@@ -456,13 +461,27 @@ function RecordPage() {
     if (insError) {
       setError(`更新に失敗しました: ${insError.message}`);
     } else {
-      // 数値を保存した = 実際にやった記録になった
-      // (列がまだ無い環境ではエラーになるが、予定の印も付かないので無視してよい)
-      if (target?.is_planned) {
-        await supabase
+      // セットと同時にメモも保存する(別々に保存させると手数が増えるため)。
+      // 数値を保存した時点で「実際にやった記録」になるので、予定の印も外す。
+      const trimmedMemo = editMemo.trim().slice(0, MEMO_MAX_LENGTH);
+      const patch: { memo: string | null; is_planned?: boolean } = {
+        memo: trimmedMemo === "" ? null : trimmedMemo,
+      };
+      if (target?.is_planned) patch.is_planned = false;
+
+      let { error: logError } = await supabase
+        .from("workout_logs")
+        .update(patch)
+        .eq("id", editId);
+      // is_planned の列がまだ無い環境では、メモだけを保存し直す
+      if (logError && isMissingColumnError(logError)) {
+        ({ error: logError } = await supabase
           .from("workout_logs")
-          .update({ is_planned: false })
-          .eq("id", editId);
+          .update({ memo: patch.memo })
+          .eq("id", editId));
+      }
+      if (logError) {
+        setError(`メモの保存に失敗しました: ${logError.message}`);
       }
       setEditId(null);
       if (addedSet && target && timer.settings.autoStart) {
@@ -1096,6 +1115,46 @@ function RecordPage() {
                         onChange={setEditSets}
                         idPrefix={`edit-${log.id}`}
                       />
+
+                      {/*
+                        数値を直しながらメモも書けるようにする。
+                        セットを入れ終わってから「+ メモ」を押し直すのは手数が多く、
+                        その場で書きたいことを忘れてしまうため。
+                        保存は 1 回で、数値とメモが同時に保存される。
+                      */}
+                      <div className="mt-3">
+                        <label
+                          htmlFor={`edit-memo-${log.id}`}
+                          className="mb-1 block text-xs font-semibold text-gray-500"
+                        >
+                          メモ(任意)
+                        </label>
+                        <textarea
+                          id={`edit-memo-${log.id}`}
+                          value={editMemo}
+                          onChange={(e) => setEditMemo(e.target.value)}
+                          rows={2}
+                          maxLength={MEMO_MAX_LENGTH}
+                          placeholder={MEMO_PLACEHOLDER}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 leading-relaxed"
+                        />
+                        <p className="mt-0.5 text-right text-[11px] tabular-nums text-gray-400">
+                          {editMemo.length}/{MEMO_MAX_LENGTH}
+                        </p>
+
+                        {/* 前回のメモを見ながら書けるようにする */}
+                        {prevMemo && (
+                          <div className="mt-1 rounded-lg bg-gray-50 px-2 py-1.5">
+                            <p className="text-[11px] font-semibold text-gray-500">
+                              前回のメモ({formatShortDateLabel(prevMemo.date)})
+                            </p>
+                            <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-gray-600">
+                              {prevMemo.memo}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
                       <div className="mt-3 flex gap-2">
                         <button
                           onClick={saveEdit}

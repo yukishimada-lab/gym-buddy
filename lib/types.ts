@@ -231,6 +231,17 @@ export type NutritionTotals = {
 };
 
 /**
+ * 共有画像で「前回と比べて伸びたか」を出すための、その種目の前回の記録。
+ *
+ * lib/workoutStats.ts の PreviousRecord と同じ形。
+ * 型の参照が循環しないよう、ここでは形だけを書いている。
+ */
+export type PreviousSets = {
+  date: string; // YYYY-MM-DD
+  sets: { weight_kg: number | string; reps: number | string }[];
+};
+
+/**
  * 共有画像 1 枚分のデータ。
  * 「その日に記録がある項目だけを載せる」ため、無い項目は空配列 / null にする。
  */
@@ -240,6 +251,11 @@ export type DaySummary = {
   meals: MealLog[];
   nutrition: NutritionTotals;
   body: BodyLog | null;
+  /**
+   * 種目 ID → その種目の前回の記録(この日より前)。
+   * 前回の記録が無い種目は入らない(= 前回比を出さない)。
+   */
+  previous: Map<string, PreviousSets>;
 };
 
 // ------------------------------------------------------------

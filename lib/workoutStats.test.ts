@@ -142,6 +142,19 @@ describe("compareWithPrevious", () => {
     expect(result?.totalVolume.direction).toBe("up");
   });
 
+  it("自重種目(重量なし)でも、回数の増減は分かる", () => {
+    const result = compareWithPrevious([set(0, 12), set(0, 10)], {
+      date: "2026-09-01",
+      sets: [set(0, 10), set(0, 10)],
+    });
+    // 重量もボリュームも 0 のままなので「変化なし」
+    expect(result?.maxWeight.direction).toBe("same");
+    expect(result?.totalVolume.direction).toBe("same");
+    // 回数は 20 → 22 で伸びている
+    expect(result?.totalReps.direction).toBe("up");
+    expect(result?.totalReps.delta).toBe(2);
+  });
+
   it("重量は伸びてもボリュームが落ちていれば、それぞれ別に出る", () => {
     const result = compareWithPrevious([set(85, 3)], {
       date: "2026-09-01",

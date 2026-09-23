@@ -108,33 +108,6 @@ function MemoLine({ memo }: { memo: string }) {
   );
 }
 
-/**
- * その種目の休憩を始めるボタン。長さは種目ごとに覚えている。
- *
- * 編集中にも出す。セットを 1 つこなすたびに
- * 「編集 → 数値を入れる → 保存 → 休憩」と押すのは手数が多く、
- * ジムでは休憩を先に始めたいことのほうが多いため。
- */
-function RestButton({
-  log,
-  onStart,
-}: {
-  log: WorkoutLogWithExercise;
-  onStart: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onStart}
-      aria-label={`${exerciseName(log)}の休憩タイマーを開始`}
-      className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-2 text-sm font-semibold text-blue-700 active:bg-blue-100"
-    >
-      <Timer aria-hidden size={14} />
-      休憩
-    </button>
-  );
-}
-
 /** セットの一覧(「1set 80kg × 10回」)。通常表示と選択モードで共通に使う */
 function SetLines({
   sets,
@@ -220,6 +193,15 @@ function RecordPage() {
   const [deleting, setDeleting] = useState(false);
   const [undoTarget, setUndoTarget] = useState<DeletedSnapshot | null>(null);
 
+  /**
+   * 休憩ボタンが対象にする種目。
+   *
+   * 休憩ボタンは画面に 1 つだけ置いている(種目ごとに置くと数が多く、
+   * どれを押しても同じなので邪魔になる)。そのぶん「直前に触った種目」を
+   * 覚えておき、その種目に覚えさせた休憩時間で始める。
+   */
+  const [restTargetId, setRestTargetId] = useState<string | null>(null);
+
   // セット間の休憩タイマー(状態とロジックはフック側に持たせている)
   // タイマー本体は AppShell が持っている(タブを移動しても止まらないように)
   const timer = useRestTimerContext();
@@ -232,6 +214,15 @@ function RecordPage() {
     setRaised(barRaised);
     return () => setRaised(false);
   }, [barRaised, setRaised]);
+
+  /**
+   * 休憩ボタンが対象にする記録。
+   * 直前に触った種目が今日の記録に残っていればそれ、無ければ最後に足した種目。
+   */
+  const restTarget =
+    logs.find((log) => log.exercise_id === restTargetId) ??
+    logs[logs.length - 1] ??
+    null;
 
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
@@ -380,6 +371,8 @@ function RecordPage() {
     } else {
       // 次の種目もだいたい同じセット構成なので、直前の入力を残しておく
       setExerciseId("");
+      // いま追加した種目を、休憩ボタンの対象にする
+      if (addedExercise) setRestTargetId(addedExercise.id);
       // 記録した直後が休憩の始まり。過去の日付をまとめて入力しているときは邪魔なので、
       // 今日の記録のときだけ自動で始める。
       if (
@@ -395,6 +388,7 @@ function RecordPage() {
   };
 
   const startEdit = (log: WorkoutLogWithExercise) => {
+    setRestTargetId(log.exercise_id);
     setMemoEditId(null);
     setEditId(log.id);
     const inputs = toSetInputs(log.workout_sets ?? []);
@@ -410,6 +404,7 @@ function RecordPage() {
    * 1 タップで確定できるようにしておく。
    */
   const confirmPlanned = async (log: WorkoutLogWithExercise) => {
+    setRestTargetId(log.exercise_id);
     setSaving(true);
     setError(null);
     const supabase = createClient();
@@ -819,14 +814,17 @@ function RecordPage() {
           // 中身は前回の記録やルーティンの目標値なので、
           // 実際の記録と同じ見た目にならないよう印を付けておく
           is_planned: true,
+          // あとからカレンダーで「この日は何の日だったか」を出せるように、
+          // どのルーティンから展開したかを残しておく
+          routine_id: routine.id,
         }))
       )
       .select("id, exercise_id, sort_order");
 
-    // is_planned の列がまだ本番に無い場合(マイグレーション待ち)は、
-    // 印なしで入れ直す。展開そのものが失敗するのは避ける。
+    // is_planned / routine_id の列がまだ本番に無い場合(マイグレーション待ち)は、
+    // それらを付けずに入れ直す。展開そのものが失敗するのは避ける。
     if (insertError && isMissingColumnError(insertError)) {
-      console.warn("[workout] is_planned がまだ無いため、印なしで展開します");
+      console.warn("[workout] 新しい列がまだ無いため、印なしで展開します");
       ({ data: inserted, error: insertError } = await supabase
         .from("workout_logs")
         .insert(newLogRows)
@@ -1099,16 +1097,8 @@ function RecordPage() {
                   {log.is_planned && <PlannedBadge />}
                   {isEditing ? (
                     <div>
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 flex-1 items-center gap-1">
-                          <ExerciseHeading log={log} />
-                        </div>
-                        <RestButton
-                          log={log}
-                          onStart={() =>
-                            timer.start(log.exercise_id, exerciseName(log))
-                          }
-                        />
+                      <div className="mb-2 flex items-center gap-1">
+                        <ExerciseHeading log={log} />
                       </div>
                       <SetInputList
                         sets={editSets}
@@ -1179,12 +1169,6 @@ function RecordPage() {
                           <ExerciseHeading log={log} />
                         </div>
                         <div className="flex shrink-0 gap-1">
-                          <RestButton
-                            log={log}
-                            onStart={() =>
-                              timer.start(log.exercise_id, exerciseName(log))
-                            }
-                          />
                           <button
                             onClick={() => startEdit(log)}
                             className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
@@ -1367,6 +1351,34 @@ function RecordPage() {
           </form>
         )}
       </section>
+
+      {/*
+        休憩ボタン。画面に 1 つだけ、親指が届く右下に固定する。
+        以前は種目カードごとに置いていたが、どのカードから押しても
+        やることは同じなので数が多いだけだった、という指摘への対応。
+        タイマーが動いているあいだは、下のタイマーバーと重なるので出さない。
+      */}
+      {restTarget && !timer.session && (
+        <div className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4rem)] z-30 mx-auto w-full max-w-md px-4">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() =>
+                timer.start(restTarget.exercise_id, exerciseName(restTarget))
+              }
+              aria-label={`${exerciseName(restTarget)}の休憩タイマーを開始`}
+              className="flex max-w-[15rem] items-center gap-2 rounded-full bg-blue-600 py-3 pr-4 pl-5 font-bold text-white shadow-lg active:opacity-80"
+            >
+              <Timer aria-hidden className="shrink-0" size={18} />
+              <span className="shrink-0">休憩</span>
+              {/* どの種目の休憩時間で始まるかが分かるようにしておく */}
+              <span className="min-w-0 truncate text-xs font-normal text-blue-100">
+                {exerciseName(restTarget)}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 固定した一括削除バー / スナックバーに隠れないよう、下に余白を足す
           (休憩タイマーのぶんの余白は AppShell 側でまとめて足している) */}

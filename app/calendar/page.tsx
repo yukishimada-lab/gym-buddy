@@ -25,7 +25,11 @@ import {
   summaryLine,
   type PreviousRecord,
 } from "@/lib/workoutStats";
-import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
+import {
+  groupByMuscleGroup,
+  mainMuscleGroup,
+  normalizeMuscleGroup,
+} from "@/lib/muscleGroups";
 import ShareDaySummary from "@/components/ShareDaySummary";
 import HelpButton from "@/components/HelpButton";
 import type {
@@ -72,7 +76,14 @@ function MealMark() {
 }
 
 /** カレンダーのマス目に出すマーク(記録の有無だけ) */
-type DayMarks = { workout: boolean; meal: boolean };
+type DayMarks = {
+  workout: boolean;
+  meal: boolean;
+  /** その日の主な部位(カレンダーのマスに出すラベル)。トレーニングが無い日は未設定 */
+  group?: string;
+  /** 主な部位のほかにもやった部位があるか(「＋」を付けるかの判定) */
+  hasOtherGroups?: boolean;
+};
 
 function CalendarPage() {
   const searchParams = useSearchParams();
@@ -84,6 +95,10 @@ function CalendarPage() {
   });
   const [selected, setSelected] = useState<string>(initialDate);
   const [summary, setSummary] = useState<Map<string, DayMarks>>(new Map());
+  /** ルーティン ID → 名前(「この日は何の日だったか」の表示に使う) */
+  const [routineNames, setRoutineNames] = useState<Map<string, string>>(
+    new Map()
+  );
   /** 種目 ID → その種目の前回の記録(共有画像の前回比に使う) */
   const [dayPrevious, setDayPrevious] = useState<Map<string, PreviousRecord>>(
     new Map()
@@ -111,7 +126,8 @@ function CalendarPage() {
     const [workoutRes, mealRes] = await Promise.all([
       supabase
         .from("workout_logs")
-        .select("workout_date")
+        // マスに「何の日だったか」を出すため、部位も一緒に取る
+        .select("workout_date, exercises(name, muscle_group)")
         .gte("workout_date", gridFrom)
         .lte("workout_date", gridTo),
       supabase
@@ -128,14 +144,43 @@ function CalendarPage() {
     }
 
     const map = new Map<string, DayMarks>();
-    const mark = (date: string, key: keyof DayMarks) => {
+    const mark = (date: string, key: "workout" | "meal") => {
       const current = map.get(date) ?? { workout: false, meal: false };
       current[key] = true;
       map.set(date, current);
     };
-    for (const row of (workoutRes.data as { workout_date: string }[]) ?? []) {
+
+    // 日付ごとに、その日やった種目の部位を集めておく
+    const groupsByDate = new Map<string, string[]>();
+    // 結合した exercises は、型の上では配列にも単体にもなり得るのでどちらも受ける
+    type JoinedExercise = { name: string | null; muscle_group: string | null };
+    const firstExercise = (
+      value: JoinedExercise | JoinedExercise[] | null
+    ): JoinedExercise | null => (Array.isArray(value) ? (value[0] ?? null) : value);
+
+    const workoutRows = (workoutRes.data ?? []) as unknown as {
+      workout_date: string;
+      exercises: JoinedExercise | JoinedExercise[] | null;
+    }[];
+    for (const row of workoutRows) {
       mark(row.workout_date, "workout");
+      const exercise = firstExercise(row.exercises);
+      const list = groupsByDate.get(row.workout_date) ?? [];
+      list.push(
+        normalizeMuscleGroup(exercise?.muscle_group, exercise?.name ?? undefined)
+      );
+      groupsByDate.set(row.workout_date, list);
     }
+    // その日の主な部位を決める(同数なら表示順で先のもの)
+    for (const [date, groups] of groupsByDate) {
+      const main = mainMuscleGroup(groups);
+      const current = map.get(date);
+      if (main && current) {
+        current.group = main.group;
+        current.hasOtherGroups = main.hasOthers;
+      }
+    }
+
     // 食事記録は Phase 2 未セットアップでも動くよう、エラーは無視して色を付けないだけにする
     for (const row of (mealRes.data as { meal_date: string }[] | null) ?? []) {
       mark(row.meal_date, "meal");
@@ -197,6 +242,19 @@ function CalendarPage() {
     })();
   }, [ym, loadMonth]);
 
+  // ルーティン名は日別詳細で使うだけなので、最初に一度だけ取っておく
+  useEffect(() => {
+    (async () => {
+      const supabase = createClient();
+      const { data } = await supabase.from("routines").select("id, name");
+      const map = new Map<string, string>();
+      for (const row of (data as { id: string; name: string }[] | null) ?? []) {
+        map.set(row.id, row.name);
+      }
+      setRoutineNames(map);
+    })();
+  }, []);
+
   useEffect(() => {
     (async () => {
       await loadDay(selected);
@@ -241,6 +299,19 @@ function CalendarPage() {
       ),
     [dayLogs]
   );
+
+  /**
+   * その日に展開したルーティンの名前(重複なし)。
+   * 手で追加しただけの記録や、ルーティンを消したあとの記録では空になる。
+   */
+  const dayRoutines = useMemo(() => {
+    const names: string[] = [];
+    for (const log of dayLogs) {
+      const name = log.routine_id ? routineNames.get(log.routine_id) : null;
+      if (name && !names.includes(name)) names.push(name);
+    }
+    return names;
+  }, [dayLogs, routineNames]);
 
   const daySummary: DaySummary = useMemo(
     () => ({
@@ -336,9 +407,9 @@ function CalendarPage() {
                 onClick={() => selectDay(cell.date)}
                 aria-pressed={isSelected}
                 aria-label={`${formatDateLabel(cell.date)}${
-                  marks.length > 0 ? ` ${marks.join("・")}あり` : " 記録なし"
-                }`}
-                className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-lg text-sm tabular-nums ${
+                  day?.group ? ` ${day.group}` : ""
+                }${marks.length > 0 ? ` ${marks.join("・")}あり` : " 記録なし"}`}
+                className={`flex aspect-square flex-col items-center justify-center gap-0.5 rounded-lg text-sm tabular-nums ${
                   cell.inMonth ? "" : "opacity-35"
                 } ${
                   isSelected
@@ -360,6 +431,31 @@ function CalendarPage() {
                 }}
               >
                 <span className="leading-none">{cell.day}</span>
+
+                {/*
+                  その日の主な部位。ひと目で「何の日だったか」が分かるようにする。
+                  8 区分に色を割り当てると、このサイズでは見分けがつかなくなるうえ
+                  色覚によっては区別できないので、文字で出している。
+                  複数の部位をやった日は「＋」を付ける。
+                */}
+                {day?.group && (
+                  <span
+                    className="flex max-w-full items-baseline justify-center leading-tight"
+                    style={{ color: VIZ.textSecondary }}
+                  >
+                    <span className="truncate text-[10px] font-semibold tracking-tighter">
+                      {day.group}
+                    </span>
+                    {/* 「+」は名前より小さく、かつ縮まないようにする
+                        (「有酸素+」のような 4 文字が 1 マスに収まるように) */}
+                    {day.hasOtherGroups && (
+                      <span className="shrink-0 text-[8px] font-semibold">
+                        +
+                      </span>
+                    )}
+                  </span>
+                )}
+
                 {/* マークは色だけでなく形も変える(塗り = トレーニング / 輪郭 = 食事) */}
                 <span className="flex h-2 items-center gap-0.5">
                   {day?.workout && <WorkoutMark />}
@@ -396,10 +492,25 @@ function CalendarPage() {
         ) : (
           <>
             <div className="mb-3">
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-600">
-                <WorkoutMark />
-                トレーニング({dayLogs.length}種目)
-              </p>
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-gray-600">
+                  <WorkoutMark />
+                  トレーニング({dayLogs.length}種目)
+                </p>
+                {/* ルーティンから展開した日は、その名前を出す(何の日だったか) */}
+                {dayRoutines.map((name) => (
+                  <span
+                    key={name}
+                    className="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                    style={{
+                      backgroundColor: VIZ.series1Tint,
+                      color: VIZ.textPrimary,
+                    }}
+                  >
+                    {name}
+                  </span>
+                ))}
+              </div>
               {dayLogs.length === 0 ? (
                 <p className="text-sm text-gray-400">記録がありません</p>
               ) : (

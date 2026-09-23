@@ -36,6 +36,12 @@ export type WorkoutLog = {
    * 「この内容で実施」を押した時点で false になる。
    */
   is_planned: boolean;
+  /**
+   * この記録がどのルーティンを展開して作られたか(任意)。
+   * 手で 1 種目ずつ追加した記録は null。
+   * カレンダーで「この日は何の日だったか」を出すのに使う。
+   */
+  routine_id: string | null;
   created_at: string;
 };
 

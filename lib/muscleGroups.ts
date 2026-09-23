@@ -214,6 +214,35 @@ export function muscleGroupOrder(group: string): number {
 }
 
 /**
+ * その日に一番多くやった部位を返す(カレンダーのマスに出すラベル用)。
+ *
+ * 「背中 5 種目・腕 4 種目」の日は「背中」を返す。
+ * 同数のときは MUSCLE_GROUPS の順(胸 → 背中 → …)で先のものを採る。
+ *
+ * @returns 主な部位と、他にもやった部位があるか。記録が無ければ null。
+ */
+export function mainMuscleGroup(
+  groups: string[]
+): { group: MuscleGroup; hasOthers: boolean } | null {
+  if (groups.length === 0) return null;
+
+  const counts = new Map<string, number>();
+  for (const group of groups) {
+    const key = normalizeMuscleGroup(group);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const sorted = [...counts.entries()].sort(
+    ([aGroup, aCount], [bGroup, bCount]) =>
+      bCount - aCount || muscleGroupOrder(aGroup) - muscleGroupOrder(bGroup)
+  );
+  return {
+    group: sorted[0][0] as MuscleGroup,
+    hasOthers: sorted.length > 1,
+  };
+}
+
+/**
  * 「部位ごとのセクション」に並べ替える汎用のグルーピング。
  * 部位の順番は MUSCLE_GROUPS 固定で、記録がある部位だけを返す。
  * セクション内の順番は渡された配列の順(= sort_order)をそのまま保つ。

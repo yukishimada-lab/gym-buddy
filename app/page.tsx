@@ -1,6 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -11,7 +18,14 @@ import TrendBadges from "@/components/TrendBadges";
 import HelpButton from "@/components/HelpButton";
 import { useRestTimerContext } from "@/components/RestTimerProvider";
 import ExercisePicker from "@/components/ExercisePicker";
-import { GripVertical, NotebookPen, StickyNote, Timer } from "lucide-react";
+import QuickSetAdd from "@/components/QuickSetAdd";
+import {
+  Check,
+  GripVertical,
+  NotebookPen,
+  StickyNote,
+  Timer,
+} from "lucide-react";
 import {
   PLANNED_CARD_CLASS,
   PlannedBadge,
@@ -55,6 +69,13 @@ const PHASE4_SETUP_HINT = "(supabase/phase4.sql を実行済みか確認して�
 
 /** 削除後に「元に戻す」を出しておく時間 */
 const UNDO_TIMEOUT_MS = 8000;
+
+/**
+ * 編集中の内容を自動保存するまでの待ち時間。
+ * 打っている途中で毎回保存すると通信が多すぎるので、手が止まってから保存する。
+ * 入力欄から指を離した時点でも保存するので、実際にはこの時間を待つことは少ない。
+ */
+const AUTOSAVE_DELAY_MS = 1000;
 
 /** 確認ダイアログに種目名を並べる上限(多すぎると読めないので省略する) */
 const CONFIRM_NAME_LIMIT = 8;
@@ -104,6 +125,38 @@ function MemoLine({ memo }: { memo: string }) {
       <span className="line-clamp-2 min-w-0 flex-1 break-words whitespace-pre-wrap">
         {memo}
       </span>
+    </span>
+  );
+}
+
+/**
+ * 自動保存の状態。「保存ボタンが無い = 保存されていないのでは」と
+ * 不安にさせないため、保存中と保存済みをはっきり出す。
+ * 色だけでなく文言とアイコンでも区別している。
+ */
+function AutosaveStatus({
+  status,
+}: {
+  status: "idle" | "pending" | "saving" | "saved";
+}) {
+  if (status === "idle") {
+    return (
+      <span className="text-xs text-gray-500">
+        入力すると自動で保存されます
+      </span>
+    );
+  }
+  if (status === "saved") {
+    return (
+      <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700">
+        <Check aria-hidden size={14} />
+        保存しました
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs font-semibold text-gray-500" role="status">
+      保存中…
     </span>
   );
 }
@@ -175,8 +228,52 @@ function RecordPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [editSets, setEditSets] = useState<SetInput[]>([]);
 
-  /** セットの編集中に一緒に書けるメモ(保存すると数値と同時に保存される) */
+  /** セットの編集中に一緒に書けるメモ(数値と同時に自動保存される) */
   const [editMemo, setEditMemo] = useState("");
+
+  /**
+   * 編集中の自動保存の状態。「保存を押し忘れて消えた」と思わせないよう、
+   * 画面に「保存中…」「保存しました」を出すために持っている。
+   */
+  const [editStatus, setEditStatus] = useState<
+    "idle" | "pending" | "saving" | "saved"
+  >("idle");
+
+  /**
+   * 自動保存は「打ち終わってから少し置いて」走らせるので、
+   * 画面の state より新しい値を保存処理から読む必要がある。そのための控え。
+   */
+  const editIdRef = useRef<string | null>(null);
+  const editSetsRef = useRef<SetInput[]>([]);
+  const editMemoRef = useRef("");
+  /** 最後に保存し終えた内容(同じ内容で保存し直さないため) */
+  const savedSnapshotRef = useRef<{ sets: SetInput[]; memo: string } | null>(
+    null
+  );
+  /** 待機中の自動保存(打ち直すたびに取り消して入れ直す) */
+  const autosaveTimerRef = useRef<number | null>(null);
+  /** 保存処理を直列に並べる(削除 → 挿入 が入れ違いにならないように) */
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  /** 編集中の種目(保存のたびに logs を読み直さなくて済むように控える) */
+  const editTargetRef = useRef<{
+    exerciseId: string;
+    name: string;
+    isPlanned: boolean;
+  } | null>(null);
+  /** 編集を開いた時点のセット数。これより増えたら「1 セットこなした」とみなす */
+  const editBaselineCountRef = useRef(0);
+  /** すでに休憩タイマーを始めたセット数(同じ増加で二重に始めないため) */
+  const timerFiredCountRef = useRef(0);
+
+  /** 「今日のワークを終了」を押したあとの完了パネルを出すか */
+  const [finished, setFinished] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+
+  /** 自動保存は少し遅れて走るので、そのときの日付も控えから読む */
+  const dateRef = useRef(date);
+  useEffect(() => {
+    dateRef.current = date;
+  }, [date]);
 
   // メモ編集(日付 × 種目 = 記録 1 件につき 1 つ)
   const [memoEditId, setMemoEditId] = useState<string | null>(null);
@@ -223,6 +320,20 @@ function RecordPage() {
     logs.find((log) => log.exercise_id === restTargetId) ??
     logs[logs.length - 1] ??
     null;
+
+  /** その日の合計(「今日のワークを終了」で出すまとめに使う) */
+  const dayTotals = useMemo(() => {
+    const done = logs.filter((log) => !log.is_planned);
+    return {
+      exercises: done.length,
+      sets: done.reduce((n, log) => n + (log.workout_sets?.length ?? 0), 0),
+      volume: done.reduce(
+        (v, log) => v + totalVolume(sortSets(log.workout_sets ?? [])),
+        0
+      ),
+      planned: logs.filter((log) => log.is_planned).length,
+    };
+  }, [logs]);
 
   /** その日の記録と、同じ種目の「前回の記録」をまとめて取得する */
   const loadLogs = useCallback(async (targetDate: string) => {
@@ -299,18 +410,6 @@ function RecordPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      setEditId(null);
-      setMemoEditId(null);
-      setMemoDraft("");
-      // 日付をまたいで選択状態や「元に戻す」を持ち越さない
-      setSelectMode(false);
-      setSelectedIds([]);
-      setUndoTarget(null);
-      await loadLogs(date);
-    })();
-  }, [date, loadLogs]);
 
   // 「元に戻す」は数秒だけ出す(押さなければそのまま消える)
   useEffect(() => {
@@ -319,9 +418,205 @@ function RecordPage() {
     return () => clearTimeout(timeoutId);
   }, [undoTarget]);
 
+  /**
+   * 編集中の内容を実際に保存する。
+   *
+   * 「保存」ボタンを押させるのをやめ、打ち終わった時点で自動的にここへ来る。
+   * 同じ内容で何度も保存しないよう、直前に保存した内容と突き合わせている。
+   */
+  const persistEdit = async () => {
+    const id = editIdRef.current;
+    const target = editTargetRef.current;
+    if (!id || !target) return;
+
+    const sets = editSetsRef.current;
+    const memo = editMemoRef.current;
+
+    if (sets.length === 0) {
+      setError(
+        "セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。"
+      );
+      setEditStatus("idle");
+      return;
+    }
+
+    // 中身が変わっていなければ通信しない
+    const snapshot = savedSnapshotRef.current;
+    if (snapshot && sameSets(sets, snapshot.sets) && snapshot.memo === memo) {
+      setEditStatus("saved");
+      return;
+    }
+
+    // セットが増えた = 1 セットこなした直後、とみなして休憩に入る。
+    // 数値の打ち直しなど、セット数が変わらない編集では始めない。
+    const addedSet =
+      sets.length > editBaselineCountRef.current &&
+      sets.length > timerFiredCountRef.current;
+
+    setEditStatus("saving");
+    setError(null);
+    const supabase = createClient();
+
+    // set_number を振り直すので、いったん全部消してから入れ直す
+    const { error: delError } = await supabase
+      .from("workout_sets")
+      .delete()
+      .eq("workout_log_id", id);
+    if (delError) {
+      setError(`自動保存に失敗しました: ${delError.message}`);
+      setEditStatus("idle");
+      return;
+    }
+    const rows = toSetRows(sets).map((row) => ({ workout_log_id: id, ...row }));
+    let { error: insError } = await supabase.from("workout_sets").insert(rows);
+    // ここで失敗すると、消したあと入れ直せずセットが消えたままになる。
+    // 一時的な通信の失敗なら次で通るので、すぐに 1 度だけやり直す。
+    if (insError) {
+      ({ error: insError } = await supabase.from("workout_sets").insert(rows));
+    }
+    if (insError) {
+      setError(
+        `自動保存に失敗しました(この種目のセットはまだ保存されていません): ${insError.message}`
+      );
+      setEditStatus("idle");
+      return;
+    }
+
+    // セットと同時にメモも保存する(別々に保存させると手数が増えるため)。
+    // 数値が入った時点で「実際にやった記録」になるので、予定の印も外す。
+    const trimmedMemo = memo.trim().slice(0, MEMO_MAX_LENGTH);
+    const patch: { memo: string | null; is_planned?: boolean } = {
+      memo: trimmedMemo === "" ? null : trimmedMemo,
+    };
+    if (target.isPlanned) patch.is_planned = false;
+
+    let { error: logError } = await supabase
+      .from("workout_logs")
+      .update(patch)
+      .eq("id", id);
+    // is_planned の列がまだ無い環境では、メモだけを保存し直す
+    if (logError && isMissingColumnError(logError)) {
+      ({ error: logError } = await supabase
+        .from("workout_logs")
+        .update({ memo: patch.memo })
+        .eq("id", id));
+    }
+    if (logError) {
+      setError(`メモの自動保存に失敗しました: ${logError.message}`);
+      setEditStatus("idle");
+      return;
+    }
+
+    savedSnapshotRef.current = { sets, memo };
+    editTargetRef.current = { ...target, isPlanned: false };
+    setEditStatus("saved");
+
+    if (addedSet && timer.settings.autoStart) {
+      timerFiredCountRef.current = sets.length;
+      timer.start(target.exerciseId, target.name);
+    }
+    await loadLogs(dateRef.current);
+  };
+
+  /** 待機中の自動保存を取り消す */
+  const cancelPendingSave = () => {
+    if (autosaveTimerRef.current != null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+  };
+
+  /**
+   * 保存を 1 本の列に並べて走らせる。
+   * 「消してから入れ直す」の途中に次の保存が割り込むと
+   * セットが消えたままになりかねないため、必ず直列にする。
+   */
+  const runPersistEdit = () => {
+    saveChainRef.current = saveChainRef.current.then(persistEdit).catch(() => {});
+    return saveChainRef.current;
+  };
+
+  /** 打ち終わってから少し置いて保存する */
+  const scheduleSave = () => {
+    if (!editIdRef.current) return;
+    cancelPendingSave();
+    setEditStatus("pending");
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void runPersistEdit();
+    }, AUTOSAVE_DELAY_MS);
+  };
+
+  /** 入力欄から指を離したときなど、待たずにすぐ保存する */
+  const commitEdit = () => {
+    if (!editIdRef.current) return;
+    cancelPendingSave();
+    void runPersistEdit();
+  };
+
+  /** 保存待ちを全部流しきってから返る(画面を閉じる・日付を変えるときに使う) */
+  const flushEdit = async () => {
+    if (autosaveTimerRef.current != null) {
+      cancelPendingSave();
+      void runPersistEdit();
+    }
+    await saveChainRef.current;
+  };
+
+  const changeEditSets = (sets: SetInput[]) => {
+    setEditSets(sets);
+    editSetsRef.current = sets;
+    scheduleSave();
+  };
+
+  const changeEditMemo = (memo: string) => {
+    setEditMemo(memo);
+    editMemoRef.current = memo;
+    scheduleSave();
+  };
+
+  const startEdit = (log: WorkoutLogWithExercise) => {
+    setRestTargetId(log.exercise_id);
+    setMemoEditId(null);
+    setEditId(log.id);
+    const inputs = toSetInputs(log.workout_sets ?? []);
+    const sets = inputs.length > 0 ? inputs : [nextSet([])];
+    const memo = memoText(log.memo);
+    setEditSets(sets);
+    // 数値を直しながらメモも書ける(どちらも自動で保存される)
+    setEditMemo(memo);
+
+    // 自動保存が参照する控えを、開いた時点の内容でそろえる
+    editIdRef.current = log.id;
+    editSetsRef.current = sets;
+    editMemoRef.current = memo;
+    savedSnapshotRef.current = { sets, memo };
+    editTargetRef.current = {
+      exerciseId: log.exercise_id,
+      name: exerciseName(log),
+      isPlanned: log.is_planned,
+    };
+    const baseline = log.workout_sets?.length ?? 0;
+    editBaselineCountRef.current = baseline;
+    timerFiredCountRef.current = baseline;
+    cancelPendingSave();
+    setEditStatus("idle");
+  };
+
+  /** 編集を閉じる(閉じる前に、保存待ちがあれば流しきる) */
+  const finishEdit = async () => {
+    await flushEdit();
+    editIdRef.current = null;
+    editTargetRef.current = null;
+    savedSnapshotRef.current = null;
+    setEditId(null);
+    setEditStatus("idle");
+  };
+
   const addLog = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!exerciseId) return;
+    setFinished(false);
     if (newSets.length === 0) {
       setError("セットを 1 つ以上追加してください。");
       return;
@@ -387,15 +682,32 @@ function RecordPage() {
     setSaving(false);
   };
 
-  const startEdit = (log: WorkoutLogWithExercise) => {
-    setRestTargetId(log.exercise_id);
-    setMemoEditId(null);
-    setEditId(log.id);
-    const inputs = toSetInputs(log.workout_sets ?? []);
-    setEditSets(inputs.length > 0 ? inputs : [nextSet([])]);
-    // 数値を直しながらメモも書けるようにする(保存は一度で済む)
-    setEditMemo(memoText(log.memo));
-  };
+
+
+
+
+
+
+
+
+  useEffect(() => {
+    (async () => {
+      // 保存待ちは日付を変える操作の側で流しきってある
+      editIdRef.current = null;
+      editTargetRef.current = null;
+      savedSnapshotRef.current = null;
+      setEditId(null);
+      setEditStatus("idle");
+      setFinished(false);
+      setMemoEditId(null);
+      setMemoDraft("");
+      // 日付をまたいで選択状態や「元に戻す」を持ち越さない
+      setSelectMode(false);
+      setSelectedIds([]);
+      setUndoTarget(null);
+      await loadLogs(date);
+    })();
+  }, [date, loadLogs]);
 
   /**
    * 展開しただけの記録を「この内容で実施した」ことにする。
@@ -420,71 +732,77 @@ function RecordPage() {
     setSaving(false);
   };
 
-  const saveEdit = async () => {
-    if (!editId) return;
-    if (editSets.length === 0) {
-      setError("セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。");
-      return;
-    }
-    // 保存の通信を待つあいだに「タップ操作の中」を抜けてしまうので、
-    // 音を鳴らす許可はここ(タップの中)で取っておく
+
+
+  /**
+   * 種目カードから 1 セットだけ足して、その場で保存する。
+   *
+   * 2 セット目以降を入れるのに「編集 → セットを追加 → 打ち直す → 保存」と
+   * 4 手かかっていたのを、数値を入れて「記録」の 1 手にするためのもの。
+   */
+  const addQuickSet = async (
+    log: WorkoutLogWithExercise,
+    weight: string,
+    reps: string
+  ) => {
+    // 保存を待つ間に「操作の中」ではなくなるので、ここで音の許可だけ取っておく
     timer.prepareAudio();
-
-    // セットが増えた = 1 セットこなした直後、とみなして休憩に入る。
-    // 数値の打ち直しなど、セット数が変わらない編集では始めない。
-    const target = logs.find((log) => log.id === editId) ?? null;
-    const addedSet =
-      target != null && editSets.length > (target.workout_sets?.length ?? 0);
-
+    setFinished(false);
+    setRestTargetId(log.exercise_id);
     setSaving(true);
     setError(null);
     const supabase = createClient();
 
-    // set_number を振り直すので、いったん全部消してから入れ直す
-    const { error: delError } = await supabase
-      .from("workout_sets")
-      .delete()
-      .eq("workout_log_id", editId);
-    if (delError) {
-      setError(`更新に失敗しました: ${delError.message}`);
-      setSaving(false);
-      return;
-    }
-    const { error: insError } = await supabase.from("workout_sets").insert(
-      toSetRows(editSets).map((row) => ({ workout_log_id: editId, ...row }))
-    );
-    if (insError) {
-      setError(`更新に失敗しました: ${insError.message}`);
-    } else {
-      // セットと同時にメモも保存する(別々に保存させると手数が増えるため)。
-      // 数値を保存した時点で「実際にやった記録」になるので、予定の印も外す。
-      const trimmedMemo = editMemo.trim().slice(0, MEMO_MAX_LENGTH);
-      const patch: { memo: string | null; is_planned?: boolean } = {
-        memo: trimmedMemo === "" ? null : trimmedMemo,
-      };
-      if (target?.is_planned) patch.is_planned = false;
+    const current = sortSets(log.workout_sets ?? []);
+    const { error: insError } = await supabase.from("workout_sets").insert({
+      workout_log_id: log.id,
+      set_number: current.length + 1,
+      weight_kg: Number(weight) || 0,
+      reps: Number(reps) || 0,
+    });
 
-      let { error: logError } = await supabase
-        .from("workout_logs")
-        .update(patch)
-        .eq("id", editId);
-      // is_planned の列がまだ無い環境では、メモだけを保存し直す
-      if (logError && isMissingColumnError(logError)) {
-        ({ error: logError } = await supabase
+    if (insError) {
+      setError(`セットの記録に失敗しました: ${insError.message}`);
+    } else {
+      // 数値が入った時点で「実際にやった記録」になるので、予定の印を外す
+      if (log.is_planned) {
+        const { error: logError } = await supabase
           .from("workout_logs")
-          .update({ memo: patch.memo })
-          .eq("id", editId));
+          .update({ is_planned: false })
+          .eq("id", log.id);
+        if (logError && !isMissingColumnError(logError)) {
+          setError(`更新に失敗しました: ${logError.message}`);
+        }
       }
-      if (logError) {
-        setError(`メモの保存に失敗しました: ${logError.message}`);
-      }
-      setEditId(null);
-      if (addedSet && target && timer.settings.autoStart) {
-        timer.start(target.exercise_id, exerciseName(target));
+      // 1 セットこなした直後なので、そのまま休憩に入る
+      if (timer.settings.autoStart && date === todayString()) {
+        timer.start(log.exercise_id, exerciseName(log));
       }
     }
     await loadLogs(date);
     setSaving(false);
+  };
+
+  /**
+   * 今日のワークを終了する。
+   *
+   * 入力そのものは自動保存しているので、ここで初めて保存されるわけではない。
+   * 「まだ保存されていないものが残っていないか」を確実にするための締めの操作で、
+   * 打ちかけの内容を流しきってから、編集を閉じて休憩タイマーも止める。
+   */
+  const finishWorkout = async () => {
+    setFinishing(true);
+    await flushEdit();
+    editIdRef.current = null;
+    editTargetRef.current = null;
+    savedSnapshotRef.current = null;
+    setEditId(null);
+    setEditStatus("idle");
+    setMemoEditId(null);
+    timer.stop();
+    await loadLogs(date);
+    setFinishing(false);
+    setFinished(true);
   };
 
   /** メモの編集を開く(セットの編集とは同時に開かない) */
@@ -936,7 +1254,13 @@ function RecordPage() {
         <input
           type="date"
           value={date}
-          onChange={(e) => e.target.value && setDate(e.target.value)}
+          onChange={async (e) => {
+            const next = e.target.value;
+            if (!next) return;
+            // 打ちかけの内容を保存しきってから日付を切り替える
+            await flushEdit();
+            setDate(next);
+          }}
           className="w-full rounded-lg border border-gray-300 px-3 py-2"
         />
         <p className="mt-1 text-xs text-gray-500">{formatDateLabel(date)}</p>
@@ -1102,7 +1426,8 @@ function RecordPage() {
                       </div>
                       <SetInputList
                         sets={editSets}
-                        onChange={setEditSets}
+                        onChange={changeEditSets}
+                        onCommit={commitEdit}
                         idPrefix={`edit-${log.id}`}
                       />
 
@@ -1110,7 +1435,7 @@ function RecordPage() {
                         数値を直しながらメモも書けるようにする。
                         セットを入れ終わってから「+ メモ」を押し直すのは手数が多く、
                         その場で書きたいことを忘れてしまうため。
-                        保存は 1 回で、数値とメモが同時に保存される。
+                        数値と同じく、書いた時点で自動的に保存される。
                       */}
                       <div className="mt-3">
                         <label
@@ -1122,7 +1447,8 @@ function RecordPage() {
                         <textarea
                           id={`edit-memo-${log.id}`}
                           value={editMemo}
-                          onChange={(e) => setEditMemo(e.target.value)}
+                          onChange={(e) => changeEditMemo(e.target.value)}
+                          onBlur={commitEdit}
                           rows={2}
                           maxLength={MEMO_MAX_LENGTH}
                           placeholder={MEMO_PLACEHOLDER}
@@ -1145,19 +1471,18 @@ function RecordPage() {
                         )}
                       </div>
 
-                      <div className="mt-3 flex gap-2">
+                      {/*
+                        保存ボタンは置いていない。打ち終わった時点で自動的に
+                        保存されるので、押し忘れも「保存を押すのが面倒」も無くなる。
+                        そのかわり、保存されたことが分かる表示は必ず出す。
+                      */}
+                      <div className="mt-3 flex items-center gap-2">
+                        <AutosaveStatus status={editStatus} />
                         <button
-                          onClick={saveEdit}
-                          disabled={saving}
-                          className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                          onClick={finishEdit}
+                          className="ml-auto shrink-0 rounded-lg bg-gray-800 px-5 py-2 text-sm font-semibold text-white active:opacity-80"
                         >
-                          保存
-                        </button>
-                        <button
-                          onClick={() => setEditId(null)}
-                          className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80"
-                        >
-                          キャンセル
+                          閉じる
                         </button>
                       </div>
                     </div>
@@ -1203,14 +1528,51 @@ function RecordPage() {
                             disabled={saving}
                           />
                         ) : (
-                          <div data-tour="record-trend">
-                            <TrendBadges
-                              comparison={comparison}
-                              maxWeight={maxWeight(sets)}
-                              totalVolume={totalVolume(sets)}
-                              weightless={sets.length > 0 && !hasWeight(sets)}
-                            />
-                          </div>
+                          <>
+                            {/*
+                              「もう 1 セット」をその場で足す欄。
+                              編集を開かずに、数値を入れて「記録」の 1 手で終わる。
+                              初期値は直前のセットで、触ると全選択されるので
+                              前の数字を消す操作も要らない。
+                            */}
+                            <div data-tour="record-quick-set">
+                              <QuickSetAdd
+                                key={`${log.id}-${sets.length}`}
+                                idPrefix={log.id}
+                                exerciseName={exerciseName(log)}
+                                setNumber={sets.length + 1}
+                                defaultWeight={
+                                  sets.length > 0
+                                    ? String(
+                                        Number(
+                                          sets[sets.length - 1].weight_kg
+                                        ) || ""
+                                      )
+                                    : ""
+                                }
+                                defaultReps={
+                                  sets.length > 0
+                                    ? String(
+                                        Number(sets[sets.length - 1].reps) || ""
+                                      )
+                                    : "10"
+                                }
+                                onAdd={(weight, reps) =>
+                                  addQuickSet(log, weight, reps)
+                                }
+                                disabled={saving}
+                              />
+                            </div>
+
+                            <div data-tour="record-trend">
+                              <TrendBadges
+                                comparison={comparison}
+                                maxWeight={maxWeight(sets)}
+                                totalVolume={totalVolume(sets)}
+                                weightless={sets.length > 0 && !hasWeight(sets)}
+                              />
+                            </div>
+                          </>
                         )}
 
                         {/* メモ(その日のその種目の書き置き) */}
@@ -1319,6 +1681,82 @@ function RecordPage() {
           </SortableList>
         )}
       </section>
+
+      {/*
+        今日のワークを終了する。
+        入力は自動保存しているので、ここが初めての保存になるわけではない。
+        「打ちかけが残っていないか」を確実にして締める操作として置いている。
+      */}
+      {!selectMode && logs.length > 0 && (
+        <section data-tour="record-finish" className="mb-4">
+          {finished ? (
+            <div className="rounded-xl border-2 border-emerald-600 bg-emerald-50 p-4">
+              <p className="flex items-center gap-1.5 text-sm font-bold text-emerald-800">
+                <Check aria-hidden size={18} />
+                今日のワークを終了しました
+              </p>
+              <p className="mt-1 text-xs text-emerald-800">
+                入力はすべて保存済みです。お疲れさまでした。
+              </p>
+
+              <dl className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-lg bg-white px-2 py-2 text-center">
+                  <dt className="text-[11px] text-gray-500">種目</dt>
+                  <dd className="text-lg font-bold tabular-nums">
+                    {dayTotals.exercises}
+                  </dd>
+                </div>
+                <div className="rounded-lg bg-white px-2 py-2 text-center">
+                  <dt className="text-[11px] text-gray-500">セット</dt>
+                  <dd className="text-lg font-bold tabular-nums">
+                    {dayTotals.sets}
+                  </dd>
+                </div>
+                <div className="rounded-lg bg-white px-2 py-2 text-center">
+                  <dt className="text-[11px] text-gray-500">総ボリューム</dt>
+                  <dd className="text-lg font-bold tabular-nums">
+                    {dayTotals.volume.toLocaleString("ja-JP")}
+                    <span className="text-xs font-normal">kg</span>
+                  </dd>
+                </div>
+              </dl>
+
+              {/* やり残しがあるなら、終わったことにする前に気づけるようにする */}
+              {dayTotals.planned > 0 && (
+                <p className="mt-2 rounded-lg bg-white px-2 py-1.5 text-xs text-gray-600">
+                  まだ実施していない種目が {dayTotals.planned} 件あります。
+                  やらなかった場合は削除しておくと、記録が正確になります。
+                </p>
+              )}
+
+              <div className="mt-3 flex gap-2">
+                <Link
+                  href={`/calendar?date=${date}`}
+                  className="flex-1 rounded-lg bg-emerald-700 py-2 text-center text-sm font-semibold text-white active:opacity-80"
+                >
+                  この日をまとめて見る
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setFinished(false)}
+                  className="flex-1 rounded-lg border border-emerald-700 bg-white py-2 text-sm font-semibold text-emerald-800 active:bg-emerald-100"
+                >
+                  まだ続ける
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={finishWorkout}
+              disabled={finishing}
+              className="w-full rounded-xl border-2 border-emerald-600 bg-white py-3 font-bold text-emerald-700 active:bg-emerald-50 disabled:opacity-40"
+            >
+              {finishing ? "保存しています…" : "今日のワークを終了"}
+            </button>
+          )}
+        </section>
+      )}
 
       {/* 追加フォーム */}
       <section data-tour="record-add" className="rounded-xl bg-white p-3 shadow-sm">

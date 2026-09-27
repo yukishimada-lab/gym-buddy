@@ -11,7 +11,15 @@ import { totalVolume } from "@/lib/workoutStats";
  * 実際のトレーニングは「1セット目 80kg×10回 / 2セット目 80kg×8回 / 3セット目 70kg×8回」
  * のようにセットごとに数値が変わるので、セット単位で入力できるようにしている。
  * セットを追加すると直前のセットの値が初期値として入る(同じ重量で続けることが多いため)。
+ *
+ * 数値の欄は触ると中身が全選択される。初期値が入っている欄を打ち直すとき、
+ * 先に消す操作が要らないようにするため(ジムで毎セットやるには手数が多すぎる)。
  */
+
+/** 入力欄を触ったら中身を全選択する(打ち直すときに消さなくて済むように) */
+function selectAll(e: React.FocusEvent<HTMLInputElement>) {
+  e.currentTarget.select();
+}
 
 export function emptySet(): SetInput {
   return { id: null, weight_kg: "", reps: "10" };
@@ -28,11 +36,17 @@ export default function SetInputList({
   sets,
   onChange,
   idPrefix,
+  onCommit,
 }: {
   sets: SetInput[];
   onChange: (sets: SetInput[]) => void;
   /** ページ内で input の id が衝突しないようにするための接頭辞 */
   idPrefix: string;
+  /**
+   * 入力欄から指を離したときに呼ぶ(自動保存する側で使う)。
+   * 打っている途中ではなく、打ち終わった時点で確実に保存させたいため。
+   */
+  onCommit?: () => void;
 }) {
   const update = (index: number, patch: Partial<SetInput>) => {
     onChange(sets.map((s, i) => (i === index ? { ...s, ...patch } : s)));
@@ -40,6 +54,7 @@ export default function SetInputList({
 
   const remove = (index: number) => {
     onChange(sets.filter((_, i) => i !== index));
+    onCommit?.();
   };
 
   const volume = totalVolume(sets);
@@ -83,6 +98,8 @@ export default function SetInputList({
                 placeholder="60"
                 value={set.weight_kg}
                 onChange={(e) => update(index, { weight_kg: e.target.value })}
+                onFocus={selectAll}
+                onBlur={() => onCommit?.()}
                 className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-2 text-center"
               />
               <span aria-hidden className="shrink-0 text-xs text-gray-400">
@@ -99,6 +116,8 @@ export default function SetInputList({
                 placeholder="10"
                 value={set.reps}
                 onChange={(e) => update(index, { reps: e.target.value })}
+                onFocus={selectAll}
+                onBlur={() => onCommit?.()}
                 className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-2 text-center"
               />
               <span aria-hidden className="shrink-0 text-xs text-gray-400">
@@ -119,7 +138,10 @@ export default function SetInputList({
 
       <button
         type="button"
-        onClick={() => onChange([...sets, nextSet(sets)])}
+        onClick={() => {
+          onChange([...sets, nextSet(sets)]);
+          onCommit?.();
+        }}
         className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-semibold text-gray-600 active:bg-gray-100"
       >
         <span className="inline-flex items-center justify-center gap-1">

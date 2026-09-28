@@ -38,6 +38,12 @@ const RECORD: TourStep[] = [
       "「選択して削除」を押すと、いらない種目にチェックを入れてまとめて消せます。",
   },
   {
+    target: "record-totals",
+    title: "その日の合計",
+    description:
+      "種目数・セット数・総ボリュームが出ます。記録するそばから増えるので、いま何セットこなしたかを数え直す必要はありません。",
+  },
+  {
     target: "record-card",
     title: "記録した種目",
     description:
@@ -222,6 +228,12 @@ const CALENDAR: TourStep[] = [
     target: "calendar-month",
     title: "月を切り替える",
     description: "‹ › で前の月・次の月に移動できます。",
+  },
+  {
+    target: "calendar-routine-filter",
+    title: "ルーティンで絞り込む",
+    description:
+      "「脚の日」のようなルーティンを選ぶと、そのルーティンをやった日だけがカレンダーに残ります。月をめくれば「最後にやったのはいつか」もすぐ分かります。「解除」で元に戻ります。",
   },
   {
     target: "calendar-grid",

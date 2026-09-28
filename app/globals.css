@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f5f7;
+  --background: #eef1f6;
   --foreground: #1a1d21;
 }
 
@@ -13,9 +13,46 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans",
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * 背景の陰影。
+ *
+ * 一面のグレーだと、白いカードが浮かずに平たく見えていた。
+ * アプリで使っている青と緑をごく薄く敷いて、上を明るく・下を沈ませている。
+ *
+ * - 固定の層にしているので、スクロールしても背景は動かない
+ *   (カードだけが動くので、奥行きが出る)
+ * - 濃さは最大でも 0.16。白いカードと文字の読みやすさは変えない
+ * - 印刷や画像書き出し(html-to-image)は対象の要素だけを描くので影響しない
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      60rem 32rem at 12% -8%,
+      rgba(37, 99, 235, 0.16),
+      transparent 62%
+    ),
+    radial-gradient(
+      46rem 30rem at 98% 2%,
+      rgba(14, 165, 233, 0.13),
+      transparent 60%
+    ),
+    radial-gradient(
+      52rem 34rem at 50% 106%,
+      rgba(16, 185, 129, 0.1),
+      transparent 62%
+    ),
+    linear-gradient(180deg, #f8fafc 0%, #eef1f6 55%, #e7ebf2 100%);
 }
 
 /* iOS で入力時に画面がズームされるのを防ぐ */

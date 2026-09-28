@@ -25,11 +25,12 @@ import {
   summaryLine,
   type PreviousRecord,
 } from "@/lib/workoutStats";
+import { groupByMuscleGroup, normalizeMuscleGroup } from "@/lib/muscleGroups";
 import {
-  groupByMuscleGroup,
-  mainMuscleGroup,
-  normalizeMuscleGroup,
-} from "@/lib/muscleGroups";
+  buildDayMarks,
+  countRoutineDaysInMonth,
+  type MonthWorkoutRow,
+} from "@/lib/calendarMarks";
 import ShareDaySummary from "@/components/ShareDaySummary";
 import HelpButton from "@/components/HelpButton";
 import type {
@@ -75,16 +76,6 @@ function MealMark() {
   );
 }
 
-/** カレンダーのマス目に出すマーク(記録の有無だけ) */
-type DayMarks = {
-  workout: boolean;
-  meal: boolean;
-  /** その日の主な部位(カレンダーのマスに出すラベル)。トレーニングが無い日は未設定 */
-  group?: string;
-  /** 主な部位のほかにもやった部位があるか(「＋」を付けるかの判定) */
-  hasOtherGroups?: boolean;
-};
-
 function CalendarPage() {
   const searchParams = useSearchParams();
   const initialDate = searchParams.get("date") ?? todayString();
@@ -94,14 +85,25 @@ function CalendarPage() {
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
   });
   const [selected, setSelected] = useState<string>(initialDate);
-  const [summary, setSummary] = useState<Map<string, DayMarks>>(new Map());
+
+  /**
+   * 表示中の月ぶんの記録(そのまま持っておく)。
+   * ルーティンの絞り込みを切り替えるたびに取り直さずに済むよう、
+   * 印への変換は buildDayMarks に任せている。
+   */
+  const [monthWorkouts, setMonthWorkouts] = useState<MonthWorkoutRow[]>([]);
+  const [monthMealDates, setMonthMealDates] = useState<string[]>([]);
+
+  /** 絞り込むルーティン(空文字ならすべて) */
+  const [routineFilter, setRoutineFilter] = useState("");
+
   /** ルーティン ID → 名前(「この日は何の日だったか」の表示に使う) */
   const [routineNames, setRoutineNames] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
   /** 種目 ID → その種目の前回の記録(共有画像の前回比に使う) */
   const [dayPrevious, setDayPrevious] = useState<Map<string, PreviousRecord>>(
-    new Map()
+    new Map(),
   );
   const [loadingMonth, setLoadingMonth] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,8 +128,9 @@ function CalendarPage() {
     const [workoutRes, mealRes] = await Promise.all([
       supabase
         .from("workout_logs")
-        // マスに「何の日だったか」を出すため、部位も一緒に取る
-        .select("workout_date, exercises(name, muscle_group)")
+        // マスに「何の日だったか」を出すため部位を、
+        // ルーティンで絞り込むため routine_id も一緒に取る
+        .select("workout_date, routine_id, exercises(name, muscle_group)")
         .gte("workout_date", gridFrom)
         .lte("workout_date", gridTo),
       supabase
@@ -143,52 +146,63 @@ function CalendarPage() {
       return;
     }
 
-    const map = new Map<string, DayMarks>();
-    const mark = (date: string, key: "workout" | "meal") => {
-      const current = map.get(date) ?? { workout: false, meal: false };
-      current[key] = true;
-      map.set(date, current);
-    };
-
-    // 日付ごとに、その日やった種目の部位を集めておく
-    const groupsByDate = new Map<string, string[]>();
     // 結合した exercises は、型の上では配列にも単体にもなり得るのでどちらも受ける
     type JoinedExercise = { name: string | null; muscle_group: string | null };
     const firstExercise = (
-      value: JoinedExercise | JoinedExercise[] | null
-    ): JoinedExercise | null => (Array.isArray(value) ? (value[0] ?? null) : value);
+      value: JoinedExercise | JoinedExercise[] | null,
+    ): JoinedExercise | null =>
+      Array.isArray(value) ? (value[0] ?? null) : value;
 
     const workoutRows = (workoutRes.data ?? []) as unknown as {
       workout_date: string;
+      routine_id: string | null;
       exercises: JoinedExercise | JoinedExercise[] | null;
     }[];
-    for (const row of workoutRows) {
-      mark(row.workout_date, "workout");
-      const exercise = firstExercise(row.exercises);
-      const list = groupsByDate.get(row.workout_date) ?? [];
-      list.push(
-        normalizeMuscleGroup(exercise?.muscle_group, exercise?.name ?? undefined)
-      );
-      groupsByDate.set(row.workout_date, list);
-    }
-    // その日の主な部位を決める(同数なら表示順で先のもの)
-    for (const [date, groups] of groupsByDate) {
-      const main = mainMuscleGroup(groups);
-      const current = map.get(date);
-      if (main && current) {
-        current.group = main.group;
-        current.hasOtherGroups = main.hasOthers;
-      }
-    }
+
+    setMonthWorkouts(
+      workoutRows.map((row) => {
+        const exercise = firstExercise(row.exercises);
+        return {
+          date: row.workout_date,
+          group: normalizeMuscleGroup(
+            exercise?.muscle_group,
+            exercise?.name ?? undefined,
+          ),
+          // routine_id の列がまだ無い環境では undefined が来るので null にそろえる
+          routineId: row.routine_id ?? null,
+        };
+      }),
+    );
 
     // 食事記録は Phase 2 未セットアップでも動くよう、エラーは無視して色を付けないだけにする
-    for (const row of (mealRes.data as { meal_date: string }[] | null) ?? []) {
-      mark(row.meal_date, "meal");
-    }
+    setMonthMealDates(
+      ((mealRes.data as { meal_date: string }[] | null) ?? []).map(
+        (row) => row.meal_date,
+      ),
+    );
     setError(null);
-    setSummary(map);
     setLoadingMonth(false);
   }, []);
+
+  /** 取得した記録を、絞り込みを反映してマス目の印に変える */
+  const summary = useMemo(
+    () => buildDayMarks(monthWorkouts, monthMealDates, routineFilter || null),
+    [monthWorkouts, monthMealDates, routineFilter],
+  );
+
+  /** 絞り込み中のルーティンを、その月に何回やったか */
+  const routineDaysThisMonth = useMemo(
+    () =>
+      routineFilter
+        ? countRoutineDaysInMonth(
+            monthWorkouts,
+            routineFilter,
+            ym.year,
+            ym.month,
+          )
+        : 0,
+    [monthWorkouts, routineFilter, ym],
+  );
 
   const loadDay = useCallback(async (date: string) => {
     setLoadingDay(true);
@@ -216,7 +230,9 @@ function CalendarPage() {
     } else {
       const { data: prevData } = await supabase
         .from("workout_logs")
-        .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+        .select(
+          "exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)",
+        )
         .in("exercise_id", exerciseIds)
         .lt("workout_date", date)
         .order("workout_date", { ascending: false })
@@ -229,8 +245,8 @@ function CalendarPage() {
                 workout_date: string;
                 workout_sets: WorkoutSet[] | null;
               }[]
-            | null) ?? []
-        )
+            | null) ?? [],
+        ),
       );
     }
     setLoadingDay(false);
@@ -279,9 +295,9 @@ function CalendarPage() {
           fat_g: acc.fat_g + Number(m.fat_g),
           carbs_g: acc.carbs_g + Number(m.carbs_g),
         }),
-        { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 }
+        { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 },
       ),
-    [dayMeals]
+    [dayMeals],
   );
 
   /**
@@ -294,10 +310,10 @@ function CalendarPage() {
       groupByMuscleGroup(dayLogs, (log) =>
         normalizeMuscleGroup(
           log.exercises?.muscle_group,
-          log.exercises?.name ?? undefined
-        )
+          log.exercises?.name ?? undefined,
+        ),
       ),
-    [dayLogs]
+    [dayLogs],
   );
 
   /**
@@ -322,7 +338,7 @@ function CalendarPage() {
       body: dayBody,
       previous: dayPrevious,
     }),
-    [selected, sections, dayMeals, mealTotal, dayBody, dayPrevious]
+    [selected, sections, dayMeals, mealTotal, dayBody, dayPrevious],
   );
 
   const hasAnyRecord =
@@ -379,6 +395,59 @@ function CalendarPage() {
             ›
           </button>
         </div>
+
+        {/*
+          ルーティンでの絞り込み。
+          「脚の日を最後にやったのはいつ?」を、月をめくりながら探せるようにする。
+        */}
+        {routineNames.size > 0 && (
+          <div data-tour="calendar-routine-filter" className="mb-2">
+            <label htmlFor="routine-filter" className="sr-only">
+              ルーティンで絞り込む
+            </label>
+            <div className="flex gap-2">
+              <select
+                id="routine-filter"
+                value={routineFilter}
+                onChange={(e) => setRoutineFilter(e.target.value)}
+                className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="">すべての記録</option>
+                {[...routineNames].map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}で絞り込む
+                  </option>
+                ))}
+              </select>
+              {routineFilter !== "" && (
+                <button
+                  type="button"
+                  onClick={() => setRoutineFilter("")}
+                  className="shrink-0 rounded-lg bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-700 active:bg-gray-200"
+                >
+                  解除
+                </button>
+              )}
+            </div>
+
+            {routineFilter !== "" && (
+              <div className="mt-2 rounded-lg bg-blue-50 px-2 py-1.5">
+                <p className="text-xs font-bold text-blue-900">
+                  {routineNames.get(routineFilter) ?? "ルーティン"}: {ym.month}
+                  月に {routineDaysThisMonth} 回
+                </p>
+                {/*
+                  ルーティンとの結びつきは Phase 13(2026-09-23)から残している。
+                  それ以前の記録は絞り込みに出てこないので、黙って 0 回に見せない。
+                */}
+                <p className="mt-0.5 text-[11px] leading-relaxed text-blue-900">
+                  絞り込み中は、そのルーティンを展開した日だけを出します。
+                  2026年9月23日より前の記録にはルーティンの情報がないため出てきません。
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 曜日見出し(日曜始まり) */}
         <div className="grid grid-cols-7 text-center text-[11px] text-gray-500">
@@ -484,11 +553,16 @@ function CalendarPage() {
       </section>
 
       {/* 選択した日の詳細 */}
-      <section data-tour="calendar-detail" className="rounded-xl bg-white p-3 shadow-sm">
+      <section
+        data-tour="calendar-detail"
+        className="rounded-xl bg-white p-3 shadow-sm"
+      >
         <h2 className="mb-2 text-sm font-bold">{formatDateLabel(selected)}</h2>
 
         {loadingDay ? (
-          <p className="py-4 text-center text-sm text-gray-400">読み込み中...</p>
+          <p className="py-4 text-center text-sm text-gray-400">
+            読み込み中...
+          </p>
         ) : (
           <>
             <div className="mb-3">

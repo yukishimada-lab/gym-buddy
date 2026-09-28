@@ -116,6 +116,61 @@ function ExerciseHeading({ log }: { log: WorkoutLogWithExercise }) {
 }
 
 /**
+ * その日の合計(種目数・セット数・総ボリューム)。
+ *
+ * 記録するそばから増えるので、いま何セットこなしたかが
+ * 数え直さなくても分かる。
+ */
+function DayTotalsStrip({
+  exercises,
+  sets,
+  volume,
+  planned,
+}: {
+  exercises: number;
+  sets: number;
+  volume: number;
+  planned: number;
+}) {
+  const items = [
+    { label: "種目", value: String(exercises), unit: "" },
+    { label: "セット", value: String(sets), unit: "" },
+    { label: "ボリューム", value: volume.toLocaleString("ja-JP"), unit: "kg" },
+  ];
+
+  return (
+    <div
+      data-tour="record-totals"
+      className="mb-2 rounded-xl bg-white p-2 shadow-sm"
+    >
+      <dl className="flex items-stretch">
+        {items.map((item, index) => (
+          <div
+            key={item.label}
+            className={`min-w-0 flex-1 px-1 text-center ${
+              index > 0 ? "border-l border-gray-100" : ""
+            }`}
+          >
+            <dt className="text-[11px] text-gray-500">{item.label}</dt>
+            <dd className="truncate text-base font-bold tabular-nums">
+              {item.value}
+              {item.unit && (
+                <span className="text-[11px] font-normal">{item.unit}</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {planned > 0 && (
+        <p className="mt-1 text-center text-[11px] text-amber-800">
+          ほかに、まだ実施していない予定が {planned} 種目あります
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * たたんだときに種目名の下に出す 1 行のまとめ。
  *
  * 次の種目に進んだら前の種目はたたむので、
@@ -1029,14 +1084,12 @@ function RecordPage() {
       created_at: l.created_at,
     }));
 
-    let { error: logsError } = await supabase
-      .from("workout_logs")
-      .insert(
-        snapshot.logs.map((l, i) => ({
-          ...restoreRows[i],
-          is_planned: l.is_planned,
-        })),
-      );
+    let { error: logsError } = await supabase.from("workout_logs").insert(
+      snapshot.logs.map((l, i) => ({
+        ...restoreRows[i],
+        is_planned: l.is_planned,
+      })),
+    );
     if (logsError && isMissingColumnError(logsError)) {
       ({ error: logsError } = await supabase
         .from("workout_logs")
@@ -1413,9 +1466,7 @@ function RecordPage() {
       {/* 記録一覧 */}
       <section className="mb-4">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-gray-600">
-            この日の記録({logs.length}件)
-          </h2>
+          <h2 className="text-sm font-semibold text-gray-600">この日の記録</h2>
           {logs.length > 0 && (
             <button
               type="button"
@@ -1431,6 +1482,15 @@ function RecordPage() {
             </button>
           )}
         </div>
+
+        {logs.length > 0 && (
+          <DayTotalsStrip
+            exercises={dayTotals.exercises}
+            sets={dayTotals.sets}
+            volume={dayTotals.volume}
+            planned={dayTotals.planned}
+          />
+        )}
 
         {!selectMode && logs.length > 1 && (
           <p className="mb-2 flex items-center gap-1 text-xs text-gray-500">

@@ -19,14 +19,30 @@ function selectorFor(step: TourStep): string {
 }
 
 /**
- * 画面に無い要素のステップを落とす。
+ * 画面に見えていない要素を指しているか。
+ *
+ * たたんである種目カードの中身のように、DOM には無くても
+ * 「あるけれど見えていない」ことがある。これを指すと、
+ * 何もない場所に吹き出しだけが出てしまう。
+ */
+function isVisible(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+/**
+ * 画面に無い(見えていない)要素のステップを落とす。
  *
  * 記録が 0 件の新規ユーザーだと種目カードなどがそもそも存在しない。
  * 落としておけば「1 / 8」の番号もその人の画面に合った数になる。
  */
 function availableSteps(id: TourId): DriveStep[] {
   return TOURS[id]
-    .filter((step) => !step.target || document.querySelector(selectorFor(step)))
+    .filter((step) => {
+      if (!step.target) return true;
+      const element = document.querySelector(selectorFor(step));
+      return element != null && isVisible(element);
+    })
     .map((step) => ({
       element: step.target ? selectorFor(step) : undefined,
       popover: {

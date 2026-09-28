@@ -21,6 +21,8 @@ import ExercisePicker from "@/components/ExercisePicker";
 import QuickSetAdd from "@/components/QuickSetAdd";
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   GripVertical,
   NotebookPen,
   StickyNote,
@@ -32,11 +34,7 @@ import {
   PlannedNotice,
   RECORD_CARD_CLASS,
 } from "@/components/PlannedRecord";
-import {
-  formatDateLabel,
-  formatShortDateLabel,
-  todayString,
-} from "@/lib/date";
+import { formatDateLabel, formatShortDateLabel, todayString } from "@/lib/date";
 import { VIZ } from "@/lib/viz";
 import {
   buildPreviousMemoMap,
@@ -52,6 +50,7 @@ import {
   sortSets,
   toSetInputs,
   toSetRows,
+  totalReps,
   totalVolume,
   type PreviousMemo,
   type PreviousRecord,
@@ -105,11 +104,61 @@ function ExerciseHeading({ log }: { log: WorkoutLogWithExercise }) {
       <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600">
         {normalizeMuscleGroup(
           log.exercises?.muscle_group,
-          log.exercises?.name ?? undefined
+          log.exercises?.name ?? undefined,
         )}
       </span>
-      <p className="min-w-0 truncate font-semibold">{exerciseName(log)}</p>
+      {/* 開閉ボタンの中にも置くので、p ではなく span で組む */}
+      <span className="min-w-0 truncate font-semibold">
+        {exerciseName(log)}
+      </span>
     </>
+  );
+}
+
+/**
+ * たたんだときに種目名の下に出す 1 行のまとめ。
+ *
+ * 次の種目に進んだら前の種目はたたむので、
+ * 「何セットやって、どれくらいの量だったか」だけは開かずに分かるようにする。
+ */
+function CollapsedSummary({
+  sets,
+  planned,
+  hasMemoLine,
+}: {
+  sets: WorkoutSet[];
+  planned: boolean;
+  hasMemoLine: boolean;
+}) {
+  const memoMark = hasMemoLine ? (
+    <StickyNote aria-hidden size={12} className="ml-1 inline shrink-0" />
+  ) : null;
+
+  if (planned) {
+    return (
+      <span className="flex items-center text-[11px] font-semibold text-amber-900">
+        予定 · {sets.length}セット(まだ実施していません)
+        {memoMark}
+      </span>
+    );
+  }
+  if (sets.length === 0) {
+    return (
+      <span className="flex items-center text-[11px] text-gray-400">
+        セットがありません{memoMark}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center text-[11px] tabular-nums text-gray-500">
+      {sets.length}セット ·{" "}
+      {hasWeight(sets)
+        ? `最大 ${formatWeight(maxWeight(sets))}kg · 計 ${totalVolume(
+            sets,
+          ).toLocaleString("ja-JP")}kg`
+        : `計 ${totalReps(sets)}回`}
+      {memoMark}
+    </span>
   );
 }
 
@@ -202,15 +251,15 @@ function SetLines({
 function RecordPage() {
   const searchParams = useSearchParams();
   const [date, setDate] = useState(
-    () => searchParams.get("date") ?? todayString()
+    () => searchParams.get("date") ?? todayString(),
   );
   const [logs, setLogs] = useState<WorkoutLogWithExercise[]>([]);
   const [previous, setPrevious] = useState<Map<string, PreviousRecord>>(
-    new Map()
+    new Map(),
   );
   /** 種目ごとの「前回のメモ」(その日より前で、いちばん新しいメモ) */
   const [previousMemos, setPreviousMemos] = useState<Map<string, PreviousMemo>>(
-    new Map()
+    new Map(),
   );
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [routines, setRoutines] = useState<RoutineWithItems[]>([]);
@@ -248,7 +297,7 @@ function RecordPage() {
   const editMemoRef = useRef("");
   /** 最後に保存し終えた内容(同じ内容で保存し直さないため) */
   const savedSnapshotRef = useRef<{ sets: SetInput[]; memo: string } | null>(
-    null
+    null,
   );
   /** 待機中の自動保存(打ち直すたびに取り消して入れ直す) */
   const autosaveTimerRef = useRef<number | null>(null);
@@ -264,6 +313,20 @@ function RecordPage() {
   const editBaselineCountRef = useRef(0);
   /** すでに休憩タイマーを始めたセット数(同じ増加で二重に始めないため) */
   const timerFiredCountRef = useRef(0);
+
+  /**
+   * いま開いている種目カード。
+   *
+   * 次の種目に進んだら前の種目はたたむ(開くのは 1 つだけ)。
+   * 種目が増えるほど画面が縦に伸びて、いまやっている種目を探すのが
+   * 大変になっていたため。
+   *
+   *   undefined … まだ自分で選んでいない(下の既定の開きかたに任せる)
+   *   null      … ぜんぶたたんでいる
+   */
+  const [openLogId, setOpenLogId] = useState<string | null | undefined>(
+    undefined,
+  );
 
   /** 「今日のワークを終了」を押したあとの完了パネルを出すか */
   const [finished, setFinished] = useState(false);
@@ -321,6 +384,20 @@ function RecordPage() {
     logs[logs.length - 1] ??
     null;
 
+  /**
+   * 何も選んでいないときに開いておくカード。
+   *
+   * 「最後に実際に記録した種目」= いまやっている種目、とみなす。
+   * ルーティンを展開しただけの日は予定しか無いので、どれも開かない
+   * (6 種目ぶんの入力欄がいきなり並ぶより、一覧から選ぶほうが早い)。
+   */
+  const defaultOpenId = useMemo(() => {
+    const done = logs.filter((log) => !log.is_planned);
+    return done.length > 0 ? done[done.length - 1].id : null;
+  }, [logs]);
+
+  const openId = openLogId === undefined ? defaultOpenId : openLogId;
+
   /** その日の合計(「今日のワークを終了」で出すまとめに使う) */
   const dayTotals = useMemo(() => {
     const done = logs.filter((log) => !log.is_planned);
@@ -329,7 +406,7 @@ function RecordPage() {
       sets: done.reduce((n, log) => n + (log.workout_sets?.length ?? 0), 0),
       volume: done.reduce(
         (v, log) => v + totalVolume(sortSets(log.workout_sets ?? [])),
-        0
+        0,
       ),
       planned: logs.filter((log) => log.is_planned).length,
     };
@@ -346,7 +423,9 @@ function RecordPage() {
       .order("created_at", { ascending: true });
 
     if (logError) {
-      setError(`記録の取得に失敗しました: ${logError.message}${PHASE4_SETUP_HINT}`);
+      setError(
+        `記録の取得に失敗しました: ${logError.message}${PHASE4_SETUP_HINT}`,
+      );
       return;
     }
     const dayLogs = sortLogs((data as WorkoutLogWithExercise[]) ?? []);
@@ -369,7 +448,7 @@ function RecordPage() {
     const { data: prevData } = await supabase
       .from("workout_logs")
       .select(
-        "exercise_id, workout_date, memo, workout_sets(weight_kg, reps, set_number)"
+        "exercise_id, workout_date, memo, workout_sets(weight_kg, reps, set_number)",
       )
       .in("exercise_id", exerciseIds)
       .lt("workout_date", targetDate)
@@ -410,7 +489,6 @@ function RecordPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   // 「元に戻す」は数秒だけ出す(押さなければそのまま消える)
   useEffect(() => {
     if (!undoTarget) return;
@@ -434,7 +512,7 @@ function RecordPage() {
 
     if (sets.length === 0) {
       setError(
-        "セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。"
+        "セットを 1 つ以上残してください(記録ごと消す場合は削除ボタンから)。",
       );
       setEditStatus("idle");
       return;
@@ -476,7 +554,7 @@ function RecordPage() {
     }
     if (insError) {
       setError(
-        `自動保存に失敗しました(この種目のセットはまだ保存されていません): ${insError.message}`
+        `自動保存に失敗しました(この種目のセットはまだ保存されていません): ${insError.message}`,
       );
       setEditStatus("idle");
       return;
@@ -518,6 +596,15 @@ function RecordPage() {
     await loadLogs(dateRef.current);
   };
 
+  /**
+   * 種目カードを開閉する。開くのは 1 つだけ(前に開いていたものは閉じる)。
+   * 触った種目は、休憩ボタンの対象にもする。
+   */
+  const toggleCard = (log: WorkoutLogWithExercise) => {
+    setOpenLogId(openId === log.id ? null : log.id);
+    setRestTargetId(log.exercise_id);
+  };
+
   /** 待機中の自動保存を取り消す */
   const cancelPendingSave = () => {
     if (autosaveTimerRef.current != null) {
@@ -532,7 +619,9 @@ function RecordPage() {
    * セットが消えたままになりかねないため、必ず直列にする。
    */
   const runPersistEdit = () => {
-    saveChainRef.current = saveChainRef.current.then(persistEdit).catch(() => {});
+    saveChainRef.current = saveChainRef.current
+      .then(persistEdit)
+      .catch(() => {});
     return saveChainRef.current;
   };
 
@@ -577,6 +666,7 @@ function RecordPage() {
 
   const startEdit = (log: WorkoutLogWithExercise) => {
     setRestTargetId(log.exercise_id);
+    setOpenLogId(log.id);
     setMemoEditId(null);
     setEditId(log.id);
     const inputs = toSetInputs(log.workout_sets ?? []);
@@ -649,7 +739,7 @@ function RecordPage() {
 
     if (insertError || !inserted) {
       setError(
-        `保存に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`
+        `保存に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`,
       );
       setSaving(false);
       return;
@@ -659,36 +749,25 @@ function RecordPage() {
       toSetRows(newSets).map((row) => ({
         workout_log_id: inserted.id as string,
         ...row,
-      }))
+      })),
     );
     if (setsError) {
       setError(`セットの保存に失敗しました: ${setsError.message}`);
     } else {
       // 次の種目もだいたい同じセット構成なので、直前の入力を残しておく
       setExerciseId("");
-      // いま追加した種目を、休憩ボタンの対象にする
+      // いま追加した種目を、休憩ボタンの対象にして開いておく
       if (addedExercise) setRestTargetId(addedExercise.id);
+      setOpenLogId(inserted.id as string);
       // 記録した直後が休憩の始まり。過去の日付をまとめて入力しているときは邪魔なので、
       // 今日の記録のときだけ自動で始める。
-      if (
-        timer.settings.autoStart &&
-        addedExercise &&
-        date === todayString()
-      ) {
+      if (timer.settings.autoStart && addedExercise && date === todayString()) {
         timer.start(addedExercise.id, addedExercise.name);
       }
     }
     await loadLogs(date);
     setSaving(false);
   };
-
-
-
-
-
-
-
-
 
   useEffect(() => {
     (async () => {
@@ -698,6 +777,7 @@ function RecordPage() {
       savedSnapshotRef.current = null;
       setEditId(null);
       setEditStatus("idle");
+      setOpenLogId(undefined);
       setFinished(false);
       setMemoEditId(null);
       setMemoDraft("");
@@ -717,6 +797,7 @@ function RecordPage() {
    */
   const confirmPlanned = async (log: WorkoutLogWithExercise) => {
     setRestTargetId(log.exercise_id);
+    setOpenLogId(log.id);
     setSaving(true);
     setError(null);
     const supabase = createClient();
@@ -732,8 +813,6 @@ function RecordPage() {
     setSaving(false);
   };
 
-
-
   /**
    * 種目カードから 1 セットだけ足して、その場で保存する。
    *
@@ -743,12 +822,14 @@ function RecordPage() {
   const addQuickSet = async (
     log: WorkoutLogWithExercise,
     weight: string,
-    reps: string
+    reps: string,
   ) => {
     // 保存を待つ間に「操作の中」ではなくなるので、ここで音の許可だけ取っておく
     timer.prepareAudio();
     setFinished(false);
     setRestTargetId(log.exercise_id);
+    // いま記録した種目を開いたままにする(次に進んだら自動でたたまれる)
+    setOpenLogId(log.id);
     setSaving(true);
     setError(null);
     const supabase = createClient();
@@ -843,7 +924,9 @@ function RecordPage() {
 
   const deleteMemo = (log: WorkoutLogWithExercise) => {
     if (memoSaving) return;
-    const ok = confirm(`${exerciseName(log)}のメモを削除します。よろしいですか?`);
+    const ok = confirm(
+      `${exerciseName(log)}のメモを削除します。よろしいですか?`,
+    );
     if (!ok) return;
     void saveMemo(log, "");
   };
@@ -861,6 +944,8 @@ function RecordPage() {
   const deleteLogs = async (targets: WorkoutLogWithExercise[]) => {
     if (targets.length === 0) return;
     const ids = targets.map((l) => l.id);
+    // 開いていたカードごと消えることがあるので、開きかたは既定に戻す
+    setOpenLogId(undefined);
 
     setDeleting(true);
     setError(null);
@@ -908,7 +993,7 @@ function RecordPage() {
     const ok = confirm(
       `${targets.length}件の種目を削除します。よろしいですか?\n\n` +
         `${shown}${rest}\n\n` +
-        "各種目のセットの記録もいっしょに削除されます。"
+        "各種目のセットの記録もいっしょに削除されます。",
     );
     if (!ok) return;
     void deleteLogs(targets);
@@ -918,7 +1003,6 @@ function RecordPage() {
 
   const deleteSelected = () =>
     confirmAndDelete(logs.filter((l) => selectedIds.includes(l.id)));
-
 
   /**
    * 直前の一括削除を元に戻す。
@@ -945,9 +1029,14 @@ function RecordPage() {
       created_at: l.created_at,
     }));
 
-    let { error: logsError } = await supabase.from("workout_logs").insert(
-      snapshot.logs.map((l, i) => ({ ...restoreRows[i], is_planned: l.is_planned }))
-    );
+    let { error: logsError } = await supabase
+      .from("workout_logs")
+      .insert(
+        snapshot.logs.map((l, i) => ({
+          ...restoreRows[i],
+          is_planned: l.is_planned,
+        })),
+      );
     if (logsError && isMissingColumnError(logsError)) {
       ({ error: logsError } = await supabase
         .from("workout_logs")
@@ -968,7 +1057,7 @@ function RecordPage() {
         weight_kg: s.weight_kg,
         reps: s.reps,
         created_at: s.created_at,
-      }))
+      })),
     );
     if (setRows.length > 0) {
       const { error: setsError } = await supabase
@@ -1002,7 +1091,7 @@ function RecordPage() {
 
   const toggleSelected = (id: string) => {
     setSelectedIds((ids) =>
-      ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id]
+      ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id],
     );
   };
 
@@ -1025,8 +1114,8 @@ function RecordPage() {
         supabase
           .from("workout_logs")
           .update({ sort_order: log.sort_order })
-          .eq("id", log.id)
-      )
+          .eq("id", log.id),
+      ),
     );
     const failed = results.find((r) => r.error);
     if (failed?.error) {
@@ -1061,12 +1150,14 @@ function RecordPage() {
     }
 
     let items = [...routine.routine_items].sort(
-      (a, b) => a.sort_order - b.sort_order
+      (a, b) => a.sort_order - b.sort_order,
     );
 
     // すでにその日に記録がある種目は、うっかり二重に展開しないよう確認する
     const recordedIds = new Set(logs.map((l) => l.exercise_id));
-    const duplicated = items.filter((item) => recordedIds.has(item.exercise_id));
+    const duplicated = items.filter((item) =>
+      recordedIds.has(item.exercise_id),
+    );
     if (duplicated.length > 0) {
       const names = duplicated
         .map((item) => item.exercises?.name ?? "(削除された種目)")
@@ -1074,7 +1165,7 @@ function RecordPage() {
       const addAnyway = confirm(
         `${names} はすでにこの日に記録があります。\n\n` +
           "OK: そのまま重複して追加する\n" +
-          "キャンセル: まだ記録がない種目だけを追加する"
+          "キャンセル: まだ記録がない種目だけを追加する",
       );
       if (!addAnyway) {
         items = items.filter((item) => !recordedIds.has(item.exercise_id));
@@ -1091,14 +1182,16 @@ function RecordPage() {
       ...new Set(
         items
           .filter((item) => item.default_weight_kg == null)
-          .map((item) => item.exercise_id)
+          .map((item) => item.exercise_id),
       ),
     ];
     let previousByExercise = new Map<string, PreviousRecord>();
     if (missingWeightIds.length > 0) {
       const { data: prevData } = await supabase
         .from("workout_logs")
-        .select("exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)")
+        .select(
+          "exercise_id, workout_date, workout_sets(weight_kg, reps, set_number)",
+        )
         .in("exercise_id", missingWeightIds)
         .lt("workout_date", date)
         .order("workout_date", { ascending: false })
@@ -1110,7 +1203,7 @@ function RecordPage() {
               workout_date: string;
               workout_sets: WorkoutSet[] | null;
             }[]
-          | null) ?? []
+          | null) ?? [],
       );
     }
 
@@ -1135,7 +1228,7 @@ function RecordPage() {
           // あとからカレンダーで「この日は何の日だったか」を出せるように、
           // どのルーティンから展開したかを残しておく
           routine_id: routine.id,
-        }))
+        })),
       )
       .select("id, exercise_id, sort_order");
 
@@ -1151,7 +1244,7 @@ function RecordPage() {
 
     if (insertError || !inserted) {
       setError(
-        `ルーティンの展開に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`
+        `ルーティンの展開に失敗しました: ${insertError?.message ?? "不明なエラー"}${PHASE4_SETUP_HINT}`,
       );
       setApplying(false);
       return;
@@ -1163,7 +1256,9 @@ function RecordPage() {
       exercise_id: string;
       sort_order: number;
     }[];
-    const sorted = [...insertedRows].sort((a, b) => a.sort_order - b.sort_order);
+    const sorted = [...insertedRows].sort(
+      (a, b) => a.sort_order - b.sort_order,
+    );
     const setRows = sorted.flatMap((row, index) => {
       const item = items[index];
       const count = Math.max(item?.default_sets ?? 1, 1);
@@ -1181,17 +1276,24 @@ function RecordPage() {
       const previous = previousByExercise.get(row.exercise_id);
       if (previous && previous.sets.length > 0) {
         const prevSets = sortSets(
-          previous.sets as { set_number: number; weight_kg: number; reps: number }[]
+          previous.sets as {
+            set_number: number;
+            weight_kg: number;
+            reps: number;
+          }[],
         );
-        return Array.from({ length: Math.max(count, prevSets.length) }, (_, i) => {
-          const source = prevSets[i] ?? prevSets[prevSets.length - 1];
-          return {
-            workout_log_id: row.id,
-            set_number: i + 1,
-            weight_kg: Number(source.weight_kg) || 0,
-            reps: Number(source.reps) || item?.default_reps || 0,
-          };
-        });
+        return Array.from(
+          { length: Math.max(count, prevSets.length) },
+          (_, i) => {
+            const source = prevSets[i] ?? prevSets[prevSets.length - 1];
+            return {
+              workout_log_id: row.id,
+              set_number: i + 1,
+              weight_kg: Number(source.weight_kg) || 0,
+              reps: Number(source.reps) || item?.default_reps || 0,
+            };
+          },
+        );
       }
 
       return Array.from({ length: count }, (_, i) => ({
@@ -1239,7 +1341,10 @@ function RecordPage() {
       </header>
 
       {/* 日付選択 */}
-      <div data-tour="record-date" className="mb-4 rounded-xl bg-white p-3 shadow-sm">
+      <div
+        data-tour="record-date"
+        className="mb-4 rounded-xl bg-white p-3 shadow-sm"
+      >
         <div className="mb-1 flex items-center justify-between">
           <label className="block text-xs font-semibold text-gray-500">
             日付
@@ -1302,7 +1407,6 @@ function RecordPage() {
               展開
             </button>
           </div>
-
         </div>
       )}
 
@@ -1357,7 +1461,9 @@ function RecordPage() {
         )}
 
         {loading ? (
-          <p className="py-6 text-center text-sm text-gray-400">読み込み中...</p>
+          <p className="py-6 text-center text-sm text-gray-400">
+            読み込み中...
+          </p>
         ) : logs.length === 0 ? (
           <p className="rounded-xl bg-white py-6 text-center text-sm text-gray-400 shadow-sm">
             まだ記録がありません
@@ -1385,7 +1491,9 @@ function RecordPage() {
                         <ExerciseHeading log={log} />
                       </div>
                       <SetLines sets={sortSets(log.workout_sets ?? [])} />
-                      {hasMemo(log.memo) && <MemoLine memo={memoText(log.memo)} />}
+                      {hasMemo(log.memo) && (
+                        <MemoLine memo={memoText(log.memo)} />
+                      )}
                     </div>
                   </label>
                 </li>
@@ -1403,13 +1511,15 @@ function RecordPage() {
               const sets = sortSets(log.workout_sets ?? []);
               const comparison = compareWithPrevious(
                 sets,
-                previous.get(log.exercise_id) ?? null
+                previous.get(log.exercise_id) ?? null,
               );
               const prevRecord = previous.get(log.exercise_id) ?? null;
               const isEditing = editId === log.id;
               const isMemoEditing = memoEditId === log.id;
               const memo = memoText(log.memo);
               const prevMemo = previousMemos.get(log.exercise_id) ?? null;
+              // 開いているのは 1 種目だけ。編集中は必ず開く
+              const expanded = openId === log.id || isEditing;
 
               return (
                 <div
@@ -1418,7 +1528,7 @@ function RecordPage() {
                     log.is_planned ? PLANNED_CARD_CLASS : RECORD_CARD_CLASS
                   }
                 >
-                  {log.is_planned && <PlannedBadge />}
+                  {log.is_planned && expanded && <PlannedBadge />}
                   {isEditing ? (
                     <div>
                       <div className="mb-2 flex items-center gap-1">
@@ -1491,188 +1601,235 @@ function RecordPage() {
                       <div className="flex items-start justify-between gap-1">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           {dragHandle}
-                          <ExerciseHeading log={log} />
-                        </div>
-                        <div className="flex shrink-0 gap-1">
+                          {/*
+                            見出しを押すと開閉する。
+                            たたんでいるときは、種目名の下に
+                            セット数と量だけを 1 行で出す。
+                          */}
                           <button
-                            onClick={() => startEdit(log)}
-                            className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
+                            type="button"
+                            onClick={() => toggleCard(log)}
+                            aria-expanded={expanded}
+                            aria-label={`${exerciseName(log)}を${
+                              expanded ? "たたむ" : "開く"
+                            }`}
+                            className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left active:opacity-70"
                           >
-                            編集
-                          </button>
-                          <button
-                            onClick={() => deleteLog(log)}
-                            disabled={deleting}
-                            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100 disabled:opacity-40"
-                          >
-                            削除
+                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                              <span className="flex min-w-0 items-center gap-1">
+                                <ExerciseHeading log={log} />
+                              </span>
+                              {!expanded && (
+                                <CollapsedSummary
+                                  sets={sets}
+                                  planned={log.is_planned}
+                                  hasMemoLine={hasMemo(log.memo)}
+                                />
+                              )}
+                            </span>
+                            {expanded ? (
+                              <ChevronUp
+                                aria-hidden
+                                size={18}
+                                className="shrink-0 text-gray-400"
+                              />
+                            ) : (
+                              <ChevronDown
+                                aria-hidden
+                                size={18}
+                                className="shrink-0 text-gray-400"
+                              />
+                            )}
                           </button>
                         </div>
+                        {/* 編集・削除は、開いているときだけ出す(たたんだ行を細く保つ) */}
+                        {expanded && (
+                          <div className="flex shrink-0 gap-1">
+                            <button
+                              onClick={() => startEdit(log)}
+                              className="rounded-lg bg-gray-100 px-3 py-2 text-sm active:bg-gray-200"
+                            >
+                              編集
+                            </button>
+                            <button
+                              onClick={() => deleteLog(log)}
+                              disabled={deleting}
+                              className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 active:bg-red-100 disabled:opacity-40"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="pl-9">
-                        <SetLines sets={sets} planned={log.is_planned} />
+                      {expanded && (
+                        <div className="pl-9">
+                          <SetLines sets={sets} planned={log.is_planned} />
 
-                        {log.is_planned ? (
-                          <PlannedNotice
-                            previousDateLabel={
-                              // 中身が前回の記録とそっくり同じときだけ
-                              // 「前回の記録を入れた」と言い切る。
-                              // そうでなければルーティンの目標値から入っている。
-                              prevRecord && sameSets(sets, prevRecord.sets)
-                                ? formatShortDateLabel(prevRecord.date)
-                                : null
-                            }
-                            onEdit={() => startEdit(log)}
-                            onConfirm={() => confirmPlanned(log)}
-                            disabled={saving}
-                          />
-                        ) : (
-                          <>
-                            {/*
+                          {log.is_planned ? (
+                            <PlannedNotice
+                              previousDateLabel={
+                                // 中身が前回の記録とそっくり同じときだけ
+                                // 「前回の記録を入れた」と言い切る。
+                                // そうでなければルーティンの目標値から入っている。
+                                prevRecord && sameSets(sets, prevRecord.sets)
+                                  ? formatShortDateLabel(prevRecord.date)
+                                  : null
+                              }
+                              onEdit={() => startEdit(log)}
+                              onConfirm={() => confirmPlanned(log)}
+                              disabled={saving}
+                            />
+                          ) : (
+                            <>
+                              {/*
                               「もう 1 セット」をその場で足す欄。
                               編集を開かずに、数値を入れて「記録」の 1 手で終わる。
                               初期値は直前のセットで、触ると全選択されるので
                               前の数字を消す操作も要らない。
                             */}
-                            <div data-tour="record-quick-set">
-                              <QuickSetAdd
-                                key={`${log.id}-${sets.length}`}
-                                idPrefix={log.id}
-                                exerciseName={exerciseName(log)}
-                                setNumber={sets.length + 1}
-                                defaultWeight={
-                                  sets.length > 0
-                                    ? String(
-                                        Number(
-                                          sets[sets.length - 1].weight_kg
-                                        ) || ""
-                                      )
-                                    : ""
-                                }
-                                defaultReps={
-                                  sets.length > 0
-                                    ? String(
-                                        Number(sets[sets.length - 1].reps) || ""
-                                      )
-                                    : "10"
-                                }
-                                onAdd={(weight, reps) =>
-                                  addQuickSet(log, weight, reps)
-                                }
-                                disabled={saving}
-                              />
-                            </div>
-
-                            <div data-tour="record-trend">
-                              <TrendBadges
-                                comparison={comparison}
-                                maxWeight={maxWeight(sets)}
-                                totalVolume={totalVolume(sets)}
-                                weightless={sets.length > 0 && !hasWeight(sets)}
-                              />
-                            </div>
-                          </>
-                        )}
-
-                        {/* メモ(その日のその種目の書き置き) */}
-                        {isMemoEditing ? (
-                          <div className="mt-2">
-                            <label
-                              htmlFor={`memo-${log.id}`}
-                              className="mb-1 block text-xs font-semibold text-gray-500"
-                            >
-                              メモ
-                            </label>
-                            <textarea
-                              id={`memo-${log.id}`}
-                              value={memoDraft}
-                              onChange={(e) => setMemoDraft(e.target.value)}
-                              rows={3}
-                              maxLength={MEMO_MAX_LENGTH}
-                              placeholder={MEMO_PLACEHOLDER}
-                              className="w-full rounded-lg border border-gray-300 px-3 py-2 leading-relaxed"
-                            />
-                            <p className="mt-0.5 text-right text-[11px] tabular-nums text-gray-400">
-                              {memoDraft.length}/{MEMO_MAX_LENGTH}
-                            </p>
-
-                            {/* 前回のメモを見ながら書けるようにする */}
-                            {prevMemo && (
-                              <div className="mt-1 rounded-lg bg-gray-50 px-2 py-1.5">
-                                <p className="text-[11px] font-semibold text-gray-500">
-                                  前回のメモ(
-                                  {formatShortDateLabel(prevMemo.date)})
-                                </p>
-                                <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-gray-600">
-                                  {prevMemo.memo}
-                                </p>
+                              <div data-tour="record-quick-set">
+                                <QuickSetAdd
+                                  key={`${log.id}-${sets.length}`}
+                                  idPrefix={log.id}
+                                  exerciseName={exerciseName(log)}
+                                  setNumber={sets.length + 1}
+                                  defaultWeight={
+                                    sets.length > 0
+                                      ? String(
+                                          Number(
+                                            sets[sets.length - 1].weight_kg,
+                                          ) || "",
+                                        )
+                                      : ""
+                                  }
+                                  defaultReps={
+                                    sets.length > 0
+                                      ? String(
+                                          Number(sets[sets.length - 1].reps) ||
+                                            "",
+                                        )
+                                      : "10"
+                                  }
+                                  onAdd={(weight, reps) =>
+                                    addQuickSet(log, weight, reps)
+                                  }
+                                  disabled={saving}
+                                />
                               </div>
-                            )}
 
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => saveMemo(log, memoDraft)}
-                                disabled={memoSaving}
-                                className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                              <div data-tour="record-trend">
+                                <TrendBadges
+                                  comparison={comparison}
+                                  maxWeight={maxWeight(sets)}
+                                  totalVolume={totalVolume(sets)}
+                                  weightless={
+                                    sets.length > 0 && !hasWeight(sets)
+                                  }
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {/* メモ(その日のその種目の書き置き) */}
+                          {isMemoEditing ? (
+                            <div className="mt-2">
+                              <label
+                                htmlFor={`memo-${log.id}`}
+                                className="mb-1 block text-xs font-semibold text-gray-500"
                               >
-                                保存
-                              </button>
-                              <button
-                                type="button"
-                                onClick={cancelMemoEdit}
-                                disabled={memoSaving}
-                                className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80 disabled:opacity-40"
-                              >
-                                キャンセル
-                              </button>
+                                メモ
+                              </label>
+                              <textarea
+                                id={`memo-${log.id}`}
+                                value={memoDraft}
+                                onChange={(e) => setMemoDraft(e.target.value)}
+                                rows={3}
+                                maxLength={MEMO_MAX_LENGTH}
+                                placeholder={MEMO_PLACEHOLDER}
+                                className="w-full rounded-lg border border-gray-300 px-3 py-2 leading-relaxed"
+                              />
+                              <p className="mt-0.5 text-right text-[11px] tabular-nums text-gray-400">
+                                {memoDraft.length}/{MEMO_MAX_LENGTH}
+                              </p>
+
+                              {/* 前回のメモを見ながら書けるようにする */}
+                              {prevMemo && (
+                                <div className="mt-1 rounded-lg bg-gray-50 px-2 py-1.5">
+                                  <p className="text-[11px] font-semibold text-gray-500">
+                                    前回のメモ(
+                                    {formatShortDateLabel(prevMemo.date)})
+                                  </p>
+                                  <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-gray-600">
+                                    {prevMemo.memo}
+                                  </p>
+                                </div>
+                              )}
+
+                              <div className="mt-2 flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => saveMemo(log, memoDraft)}
+                                  disabled={memoSaving}
+                                  className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white active:opacity-80 disabled:opacity-40"
+                                >
+                                  保存
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelMemoEdit}
+                                  disabled={memoSaving}
+                                  className="flex-1 rounded-lg bg-gray-200 py-2 text-sm font-semibold active:opacity-80 disabled:opacity-40"
+                                >
+                                  キャンセル
+                                </button>
+                              </div>
+
+                              {memo !== "" && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMemo(log)}
+                                  disabled={memoSaving}
+                                  className="mt-2 w-full rounded-lg border border-red-200 py-2 text-xs font-semibold text-red-600 active:bg-red-50 disabled:opacity-40"
+                                >
+                                  メモを削除
+                                </button>
+                              )}
                             </div>
-
-                            {memo !== "" && (
-                              <button
-                                type="button"
-                                onClick={() => deleteMemo(log)}
-                                disabled={memoSaving}
-                                className="mt-2 w-full rounded-lg border border-red-200 py-2 text-xs font-semibold text-red-600 active:bg-red-50 disabled:opacity-40"
-                              >
-                                メモを削除
-                              </button>
-                            )}
-                          </div>
-                        ) : memo !== "" ? (
-                          <button
-                            type="button"
-                            data-tour="record-memo"
-                            onClick={() => startMemoEdit(log)}
-                            aria-label={`${exerciseName(log)}のメモを編集`}
-                            className="block w-full active:opacity-70"
-                          >
-                            <MemoLine memo={memo} />
-                          </button>
-                        ) : (
-                          <div className="mt-2 flex items-center gap-2">
+                          ) : memo !== "" ? (
                             <button
                               type="button"
                               data-tour="record-memo"
                               onClick={() => startMemoEdit(log)}
-                              className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 active:bg-gray-200"
+                              aria-label={`${exerciseName(log)}のメモを編集`}
+                              className="block w-full active:opacity-70"
                             >
-                              ＋ メモ
+                              <MemoLine memo={memo} />
                             </button>
-                            {prevMemo && (
+                          ) : (
+                            <div className="mt-2 flex items-center gap-2">
                               <button
                                 type="button"
+                                data-tour="record-memo"
                                 onClick={() => startMemoEdit(log)}
-                                className="min-w-0 flex-1 truncate text-left text-xs text-gray-400 active:text-gray-600"
+                                className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 active:bg-gray-200"
                               >
-                                前回({formatShortDateLabel(prevMemo.date)}):{" "}
-                                {prevMemo.memo}
+                                ＋ メモ
                               </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                              {prevMemo && (
+                                <button
+                                  type="button"
+                                  onClick={() => startMemoEdit(log)}
+                                  className="min-w-0 flex-1 truncate text-left text-xs text-gray-400 active:text-gray-600"
+                                >
+                                  前回({formatShortDateLabel(prevMemo.date)}):{" "}
+                                  {prevMemo.memo}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1759,7 +1916,10 @@ function RecordPage() {
       )}
 
       {/* 追加フォーム */}
-      <section data-tour="record-add" className="rounded-xl bg-white p-3 shadow-sm">
+      <section
+        data-tour="record-add"
+        className="rounded-xl bg-white p-3 shadow-sm"
+      >
         <h2 className="mb-2 text-sm font-semibold text-gray-600">記録を追加</h2>
         {exercises.length === 0 && !loading ? (
           <p className="text-sm text-gray-500">
@@ -1776,7 +1936,11 @@ function RecordPage() {
             </div>
 
             <div data-tour="record-sets">
-              <SetInputList sets={newSets} onChange={setNewSets} idPrefix="new" />
+              <SetInputList
+                sets={newSets}
+                onChange={setNewSets}
+                idPrefix="new"
+              />
             </div>
 
             <button
@@ -1851,8 +2015,6 @@ function RecordPage() {
           </div>
         </div>
       )}
-
-
 
       {/* 削除の取り消し(数秒だけ出す) */}
       {undoTarget && (
